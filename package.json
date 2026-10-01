@@ -3,8 +3,8 @@
   "displayName": "Automated Processes",
   "description": "Per-branch PostgreSQL databases and one-click project scripts.",
   "version": "0.1.0",
-  "publisher": "rodrigo",
-  "license": "UNLICENSED",
+  "publisher": "rodrigoscola",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/RodrigoScola/automated-processes.git"
@@ -309,7 +309,11 @@
         },
         "automatedProcesses.server.onDatabaseChange": {
           "type": "string",
-          "enum": ["restart", "ask", "off"],
+          "enum": [
+            "restart",
+            "ask",
+            "off"
+          ],
           "enumDescriptions": [
             "Restart the running server and debug sessions so they use the new database.",
             "Ask before restarting.",

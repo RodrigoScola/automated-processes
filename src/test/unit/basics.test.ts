@@ -10,14 +10,14 @@ import { resolveAll, resolvePlaceholders } from '../../core/placeholders';
 
 suite('dbUrl', () => {
 	test('parses a driver-qualified URL', () => {
-		const parts = parseDbUrl('postgresql+asyncpg://simplecare:local-only-password@127.0.0.1:5433/simplecare');
+		const parts = parseDbUrl('postgresql+asyncpg://automated:local-only-password@127.0.0.1:5433/automated');
 		assert.deepStrictEqual(parts, {
 			scheme: 'postgresql+asyncpg',
-			user: 'simplecare',
+			user: 'automated',
 			password: 'local-only-password',
 			host: '127.0.0.1',
 			port: 5433,
-			database: 'simplecare',
+			database: 'automated',
 		});
 	});
 
@@ -67,15 +67,15 @@ suite('names', () => {
 	});
 
 	test('suggests names from patterns', () => {
-		assert.strictEqual(suggestDatabaseName('{main}_{issue}', 'simplecare', '347-carer-leaver-process'), 'simplecare_347');
-		assert.strictEqual(suggestDatabaseName('{main}_{issue}', 'simplecare', 'bug/save_medicine'), 'simplecare_save_medicine');
+		assert.strictEqual(suggestDatabaseName('{main}_{issue}', 'automated', '347-carer-leaver-process'), 'automated_347');
+		assert.strictEqual(suggestDatabaseName('{main}_{issue}', 'automated', 'bug/save_medicine'), 'automated_save_medicine');
 		assert.strictEqual(suggestDatabaseName('{main}_{branchShort}', 'app', 'feature/add-login'), 'app_add_login');
 		assert.strictEqual(suggestDatabaseName('{main}_{branch}', 'app', 'feature/x'), 'app_feature_x');
 		assert.strictEqual(suggestDatabaseName('{main}_{unknown}', 'app', 'x'), 'app_unknown');
 	});
 
 	test('keeps names within 63 characters', () => {
-		const name = suggestDatabaseName('{main}_{branchShort}', 'simplecare', '330-feature-in-app-help-assistant-for-the-dashboard-bottom-right-helper');
+		const name = suggestDatabaseName('{main}_{branchShort}', 'automated', '330-feature-in-app-help-assistant-for-the-dashboard-bottom-right-helper');
 		assert.ok(name.length <= 63, name);
 		assert.ok(!name.endsWith('_'));
 		assert.strictEqual(truncateIdentifier('abc', 2), 'ab');
@@ -93,7 +93,7 @@ suite('names', () => {
 
 suite('glob', () => {
 	test('matches * and ? anchored', () => {
-		assert.ok(matchesGlob('simplecare_test_gw3', '*_test_gw*'));
+		assert.ok(matchesGlob('automated_test_gw3', '*_test_gw*'));
 		assert.ok(matchesGlob('app_test', '*_test'));
 		assert.ok(!matchesGlob('app_test_gw1', '*_test'));
 		assert.ok(matchesGlob('ab', 'a?'));

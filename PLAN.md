@@ -360,7 +360,7 @@ of the settings above, not part of the extension's code. Based on reading the pr
   (`tests/integration/carli_test_support/fixtures.py`) create the test database, install
   `pg_partman`, run both migration streams, and rebuild it when migrations change (a fingerprint
   is stored as a comment on the database). Parallel workers get their own `_gw0`… copies. So per
-  branch, pointing `TEST_DATABASE_URL` at `simplecare_347_test` is enough. It also stops
+  branch, pointing `TEST_DATABASE_URL` at `automated_347_test` is enough. It also stops
   switching branches from forcing a test database rebuild every time.
 
 ```jsonc

@@ -63,9 +63,9 @@ suite('postgres client commands', () => {
 	});
 
 	test('container mode uses docker exec -i, like `docker exec -it carli-db-1 psql`', () => {
-		const spec = clientSpec({ ...docker, dockerContainer: 'carli-db-1' }, 'psql', ['-d', 'simplecare']);
+		const spec = clientSpec({ ...docker, dockerContainer: 'carli-db-1' }, 'psql', ['-d', 'automated']);
 		assert.strictEqual(spec.command, 'docker');
-		assert.deepStrictEqual(spec.args, ['exec', '-i', '-e', 'PGPASSWORD=pw', 'carli-db-1', 'psql', '-U', 'app', '-d', 'simplecare']);
+		assert.deepStrictEqual(spec.args, ['exec', '-i', '-e', 'PGPASSWORD=pw', 'carli-db-1', 'psql', '-U', 'app', '-d', 'automated']);
 	});
 
 	test('a container takes precedence over a Compose service', () => {

@@ -126,3 +126,7 @@ Press **F5** and pick **Run Extension on ../carli** to try it on a project.
   sidebar, status bar).
 - `src/webview/`: sidebar UI. `render.ts` is a pure state → HTML function.
 - `src/shared/protocol.ts`: messages between the extension and the sidebar.
+
+## License
+
+[MIT](LICENSE.md)
