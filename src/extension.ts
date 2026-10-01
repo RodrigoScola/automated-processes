@@ -10,6 +10,7 @@ import { BranchStore } from './core/store';
 import { WebviewMessage } from './shared/protocol';
 import { VsCodeEnvironmentSink } from './vscode/environment';
 import { VsCodeGit } from './vscode/git';
+import { VsCodeServer } from './vscode/server';
 import { readSettings, SECTION, VsCodeSettings } from './vscode/settings';
 import { SIDEBAR_VIEW_ID, SidebarProvider } from './vscode/sidebar';
 import { StatusBar } from './vscode/statusBar';
@@ -27,6 +28,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	const envSink = new VsCodeEnvironmentSink(context);
 	const statusBar = new StatusBar();
 	let sidebar: SidebarProvider | undefined;
+	const server = new VsCodeServer(folder, envSink, () => notify());
 
 	const controller: Controller = new Controller({
 		ui: new VsCodeUi(),
@@ -40,6 +42,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		root: () => root,
 		readEnv,
 		createEngine: (settings) => new PostgresEngine(settings),
+		server,
 		processEnv: process.env,
 		onDidChange: () => notify(),
 	});
@@ -55,6 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	context.subscriptions.push(
 		git,
 		statusBar,
+		server,
 		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
 		vscode.debug.registerDebugConfigurationProvider('*', envSink),
 		...registerCommands(controller, executor),
@@ -110,6 +114,9 @@ function registerCommands(controller: Controller, executor: TaskExecutor): vscod
 			}
 		},
 		startDatabase: () => controller.startDatabase(),
+		startServer: () => controller.startServer(),
+		stopServer: () => controller.stopServer(),
+		restartServer: () => controller.restartServer(),
 		refresh: () => controller.refresh(),
 		openSettings: () => controller.openSettings(),
 		cancelRun: () => controller.cancelRun(),

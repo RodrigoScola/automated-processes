@@ -21,6 +21,7 @@ suite('config', () => {
 			'database.urlVariables': ['DATABASE_URL', 'DATABASE_ADMIN_URL'],
 			'database.mainBranches': ['staging'],
 			'database.dockerComposeService': 'db',
+			'database.dockerContainer': 'carli-db-1',
 			'database.hidePatterns': [],
 			'database.newNamePattern': '{main}_{issue}',
 			'database.onBranchMerged': 'keep',
@@ -38,6 +39,8 @@ suite('config', () => {
 		assert.deepStrictEqual(config.database.urlVariables, ['DATABASE_URL', 'DATABASE_ADMIN_URL']);
 		assert.deepStrictEqual(config.database.mainBranches, ['staging']);
 		assert.deepStrictEqual(config.database.hidePatterns, []);
+		assert.strictEqual(config.database.dockerContainer, 'carli-db-1');
+		assert.strictEqual(config.database.dockerComposeService, 'db');
 		assert.strictEqual(config.database.onBranchMerged, 'keep');
 		assert.strictEqual(config.testDatabase.envFile, '.env.test');
 		assert.strictEqual(config.testDatabase.nameSuffix, '_t');

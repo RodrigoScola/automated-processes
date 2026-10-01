@@ -31,6 +31,7 @@ function state(overrides: Partial<ViewState> = {}): ViewState {
 		scripts: [{ id: 'ci', label: 'Check CI', icon: 'checklist', steps: ['Lint', 'Harness'], inputs: [{ name: 'suite', options: ['backend', 'all'], value: 'all' }] }],
 		hasMigrations: true,
 		onBranchChange: 'ask',
+		server: { configured: false, running: false, debugSessions: [], onDatabaseChange: 'restart' },
 		canStartDatabase: true,
 		now: NOW,
 		...overrides,
@@ -133,6 +134,28 @@ suite('renderApp', () => {
 		assert.match(renderApp(state({ dbStatus: 'error', dbError: 'connection refused', databases: [] })), /connection refused/);
 		assert.match(renderApp(state({ dbStatus: 'loading', databases: [] })), /Loading databases/);
 		assert.match(renderApp(state({ hiddenCount: 3 })), /Show hidden \(3\)/);
+	});
+
+	test('the Export Data button replaces "Migrate"', () => {
+		const html = renderApp(state());
+		assert.match(html, /data-command="migrate">Export Data</);
+		assert.ok(!/>Migrate</.test(html));
+	});
+
+	test('server row: hidden when unused, start when stopped, restart/stop when running', () => {
+		assert.ok(!renderApp(state()).includes('class="server'));
+		const stopped = renderApp(state({ server: { configured: true, running: false, debugSessions: [], onDatabaseChange: 'restart' } }));
+		assert.match(stopped, /server stopped/);
+		assert.match(stopped, /data-command="startServer"/);
+		assert.ok(!stopped.includes('data-command="restartServer"'));
+		const running = renderApp(state({ server: { configured: true, running: true, debugSessions: ['Backend: FastAPI'], onDatabaseChange: 'ask' } }));
+		assert.match(running, /server running · debugging Backend: FastAPI/);
+		assert.match(running, /asks to restart on database change/);
+		assert.match(running, /data-command="restartServer"/);
+		assert.match(running, /data-command="stopServer"/);
+		const debugOnly = renderApp(state({ server: { configured: false, running: false, debugSessions: ['Backend'], onDatabaseChange: 'restart' } }));
+		assert.match(debugOnly, /data-command="restartServer"/);
+		assert.ok(!debugOnly.includes('data-command="startServer"'));
 	});
 
 	test('warns visually when a feature branch uses main', () => {

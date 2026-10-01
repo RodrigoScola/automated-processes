@@ -37,6 +37,19 @@ export interface EnvironmentSink {
 	apply(additions: EnvMap | undefined, options: { terminals: boolean; description: string }): void;
 }
 
+/** The app's server (in a terminal the extension owns) and running debug sessions. */
+export interface ServerControl {
+	/** True while the extension's server terminal is running. */
+	isServerRunning(): boolean;
+	/** Names of running debug sessions that would be restarted. */
+	runningDebugSessions(): string[];
+	/** Starts (or restarts) the server terminal with this environment. */
+	startServer(command: string, env: EnvMap, cwd: string): Promise<void>;
+	stopServer(): void;
+	/** Restarts running debug sessions so they pick up the new environment. Returns their names. */
+	restartDebugSessions(): Promise<string[]>;
+}
+
 export interface SettingsWriter {
 	update(key: string, value: unknown): Promise<void>;
 	open(): void;

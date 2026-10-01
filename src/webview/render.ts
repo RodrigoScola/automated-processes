@@ -90,7 +90,7 @@ function renderDatabaseSection(state: ViewState, now: number): string {
 		${warnings}
 		${renderCurrentCard(state, now)}
 		<div class="button-row">
-			<vscode-button icon="arrow-swap" data-command="migrate"${disabled}>Migrate</vscode-button>
+			<vscode-button icon="arrow-swap" data-command="migrate"${disabled}>Export Data</vscode-button>
 			<vscode-button icon="add" secondary data-command="newDatabase"${disabled}>New Database</vscode-button>
 		</div>
 		${renderDatabaseList(state)}
@@ -167,10 +167,39 @@ function renderScriptsSection(state: ViewState, now: number): string {
 		: '';
 	return `<section class="section">
 		<header class="section-header"><h2>Scripts</h2></header>
+		${renderServer(state)}
 		<div class="scripts">${scripts}${migrations}</div>
 		${empty}
 		${state.run ? renderRun(state.run, state.scripts, now) : ''}
 	</section>`;
+}
+
+function renderServer(state: ViewState): string {
+	const server = state.server;
+	if (!server.configured && server.debugSessions.length === 0) {
+		return '';
+	}
+	const parts: string[] = [];
+	if (server.configured) {
+		parts.push(server.running ? 'server running' : 'server stopped');
+	}
+	if (server.debugSessions.length) {
+		parts.push(`debugging ${server.debugSessions.join(', ')}`);
+	}
+	const running = server.running || server.debugSessions.length > 0;
+	const restartNote = server.onDatabaseChange === 'off'
+		? 'not restarted on database change'
+		: server.onDatabaseChange === 'ask' ? 'asks to restart on database change' : 'restarts on database change';
+	const buttons = [
+		server.configured && !server.running ? iconButton('play', 'Start server', 'data-command="startServer"') : '',
+		running ? iconButton('debug-restart', 'Restart with the current database', 'data-command="restartServer"') : '',
+		server.running ? iconButton('debug-stop', 'Stop server', 'data-command="stopServer"') : '',
+	].join('');
+	return `<div class="server${running ? ' is-running' : ''}">
+		${icon(running ? 'circle-filled' : 'circle-outline', 'server-dot')}
+		<div class="db-text"><span class="truncate">${e(parts.join(' · '))}</span><span class="truncate db-detail">${e(restartNote)}</span></div>
+		<div class="server-actions">${buttons}</div>
+	</div>`;
 }
 
 function renderScript(script: ViewScript, busy: boolean): string {

@@ -5,7 +5,7 @@ scripts into sidebar buttons. It knows nothing about any particular project: eve
 project-specific is a VS Code setting (`automatedProcesses.*`).
 
 - **Per-branch databases.** `New Database` copies the main database for the current branch and
-  runs migrations on it. Switching branches switches the database. `Migrate` copies any
+  runs migrations on it. Switching branches switches the database. **Export Data** copies any
   database into any other. Databases of merged branches are dropped (or kept, by setting).
 - **No `.env` editing.** The current database is passed to scripts, new terminals and debug
   sessions as environment variables, which override `.env` in most frameworks.
@@ -18,7 +18,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 ## Requirements
 
-- PostgreSQL, either in a Docker Compose service (`database.dockerComposeService`; nothing to
+- PostgreSQL, either in Docker (`database.dockerContainer` or `database.dockerComposeService`; nothing to
   install locally) or with `psql`, `pg_dump` and `pg_restore` on PATH.
 - The user in the database URL needs the `CREATEDB` permission.
 
@@ -32,16 +32,20 @@ The design and decisions are in [PLAN.md](PLAN.md).
 | `applyToTerminals` | `true` | Current database in new terminals |
 | `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the current database; the first defines main |
 | `database.mainBranches` | `["main"]` | Branches that use the main database |
-| `database.dockerComposeService` | `""` | Run Postgres tools in this Compose service |
+| `database.dockerContainer` | `""` | Run Postgres tools in this container (`docker exec`) |
+| `database.dockerComposeService` | `""` | Or in this Compose service (`docker compose exec`) |
 | `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
 | `database.newNamePattern` | `{main}_{branchShort}` | Suggested new database name (`{main}`, `{branch}`, `{branchShort}`, `{issue}`) |
+| `database.importDataOnCreate` | `true` | New Database imports the main database (schema and data); off = empty database + migrations |
 | `database.onBranchMerged` | `delete` | `delete` or `keep` databases of merged/deleted branches |
 | `testDatabase.envFile` | `""` | Env file with the test URL (empty = `envFile`) |
 | `testDatabase.urlVariables` | `[]` | Variables pointed at the per-branch test database |
 | `testDatabase.nameSuffix` | `_test` | Test database = branch database + suffix |
 | `migrations.command` | `""` | Command that applies migrations |
 | `migrations.onBranchChange` | `ask` | `off` / `ask` / `always` |
-| `migrations.afterCopy` | `true` | Run migrations after `Migrate` |
+| `migrations.afterCopy` | `true` | Run migrations after **Export Data** |
+| `server.command` | `""` | Command that starts your server (Start/Stop/Restart in the sidebar) |
+| `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
 | `scripts` | `[]` | Sidebar script buttons |
 
 Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`, `${db.mainUrl}`,
@@ -53,12 +57,13 @@ Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`,
 {
   "automatedProcesses.database.urlVariables": ["DATABASE_URL", "DATABASE_ADMIN_URL"],
   "automatedProcesses.database.mainBranches": ["staging"],
-  "automatedProcesses.database.dockerComposeService": "db",
+  "automatedProcesses.database.dockerContainer": "carli-db-1",
   "automatedProcesses.database.hidePatterns": ["postgres", "*_test", "*_test_gw*"],
   "automatedProcesses.database.newNamePattern": "{main}_{issue}",
   "automatedProcesses.testDatabase.envFile": ".env.test",
   "automatedProcesses.testDatabase.urlVariables": ["TEST_DATABASE_URL"],
   "automatedProcesses.migrations.command": "uv run python -m carli_core.migrations.runner",
+  "automatedProcesses.server.command": "uv run uvicorn carli_api.main:app --reload --port 8000",
   "automatedProcesses.scripts": [
     {
       "id": "setup", "label": "Setup", "icon": "tools",
@@ -106,7 +111,7 @@ Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`,
 `test:pg` only creates and drops databases named `ap_selftest_*`:
 
 ```powershell
-$env:AP_PG_ROOT = 'D:\code\carli'; $env:AP_PG_SERVICE = 'db'
+$env:AP_PG_ROOT = 'D:\code\carli'; $env:AP_PG_CONTAINER = 'carli-db-1'   # or AP_PG_SERVICE = 'db'
 $env:AP_PG_COPY_MAIN = '1'   # optional: also pg_dump the main database (read-only) into a scratch copy
 npm run test:pg
 ```

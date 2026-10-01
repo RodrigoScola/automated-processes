@@ -51,6 +51,38 @@ suite('Extension (in VS Code)', function () {
 		fs.rmSync(output, { force: true });
 	});
 
+	test('starts, restarts and stops the server as a task with the database environment', async () => {
+		const output = path.join(workspace(), 'server-output.json');
+		const readOutput = async (): Promise<{ DATABASE_URL: string; pid: number }> => {
+			for (let attempt = 0; attempt < 100; attempt++) {
+				if (fs.existsSync(output)) {
+					return JSON.parse(fs.readFileSync(output, 'utf8'));
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			throw new Error('server did not start');
+		};
+		fs.rmSync(output, { force: true });
+
+		await controller.startServer();
+		const first = await readOutput();
+		assert.strictEqual(first.DATABASE_URL, 'postgres://fixture:fixture-pw@127.0.0.1:1/fixture_app');
+		assert.strictEqual(controller.snapshot().server.running, true);
+
+		fs.rmSync(output, { force: true });
+		await controller.restartServer();
+		const second = await readOutput();
+		assert.notStrictEqual(second.pid, first.pid, 'a new process');
+		assert.strictEqual(controller.snapshot().server.running, true);
+
+		controller.stopServer();
+		for (let attempt = 0; attempt < 50 && controller.snapshot().server.running; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		assert.strictEqual(controller.snapshot().server.running, false);
+		fs.rmSync(output, { force: true });
+	});
+
 	test('the sidebar view opens', async () => {
 		await vscode.commands.executeCommand('automatedProcesses.sidebar.focus');
 	});

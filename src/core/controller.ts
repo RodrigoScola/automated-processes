@@ -13,8 +13,8 @@ import {
 } from './environment';
 import { matchesAnyGlob, matchesGlob } from './glob';
 import { suggestDatabaseName, testDatabaseName, validateDatabaseName } from './names';
-import { EnvironmentSink, GitPort, PickItem, SettingsWriter, Ui } from './ports';
-import { ClientSettings, DatabaseEngine, isTemplateInUse } from './postgres';
+import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from './ports';
+import { ClientSettings, DatabaseEngine, isTemplateInUse, isToolMissing } from './postgres';
 import { RunState, ScriptRunner } from './scriptRunner';
 import { BranchStore, KeyValueStore } from './store';
 import { ViewState, ViewWarning } from '../shared/protocol';
@@ -36,6 +36,7 @@ export interface ControllerDeps {
 	root(): string | undefined;
 	readEnv(root: string, config: Config): ProjectEnv;
 	createEngine(settings: ClientSettings): DatabaseEngine;
+	server: ServerControl;
 	processEnv: Record<string, string | undefined>;
 	onDidChange(): void;
 	now?: () => number;
@@ -66,6 +67,9 @@ export class Controller {
 	private current: CurrentDatabase | undefined;
 	private mainName: string | undefined;
 	private checkingBranches = false;
+	/** The current database changed; running servers should restart once the action finishes. */
+	private restartPending = false;
+	private initialized = false;
 
 	constructor(private readonly deps: ControllerDeps) {}
 
@@ -75,6 +79,7 @@ export class Controller {
 		this.lastBranch = this.deps.git.currentBranch();
 		this.started = true;
 		await this.refresh();
+		this.initialized = true;
 		await this.checkFinishedBranches();
 	}
 
@@ -91,8 +96,13 @@ export class Controller {
 		this.lastBranch = branch;
 		await this.refresh();
 		if (previousBranch !== undefined && branch !== undefined) {
+			// When migrations run by themselves, restart after them so the server sees the new schema.
+			if (!this.willMigrateAutomatically(branch)) {
+				await this.restartServersIfPending();
+			}
 			await this.afterBranchSwitch(branch);
 		}
+		await this.restartServersIfPending();
 	}
 
 	/** Re-reads settings, env files and the database list, then updates terminals and the view. */
@@ -126,7 +136,10 @@ export class Controller {
 		const branch = this.deps.git.currentBranch();
 		const data = this.deps.store.data();
 		this.current = resolveCurrent(branch, data.links, main.name);
-		await this.deps.store.setCurrent(this.current.database);
+		const switched = await this.deps.store.setCurrent(this.current.database);
+		if (switched && this.initialized) {
+			this.restartPending = true;
+		}
 
 		this.deps.envSink.apply(
 			buildEnvAdditions({
@@ -149,7 +162,9 @@ export class Controller {
 		} catch (error) {
 			this.databases = [];
 			this.dbStatus = 'error';
-			this.dbError = messageOf(error);
+			this.dbError = isToolMissing(error) && !dockerTarget(config)
+				? `${messageOf(error)} If PostgreSQL runs in Docker, set automatedProcesses.database.dockerContainer (e.g. "my-db-1", as in \`docker exec -it my-db-1 psql\`) and the tools run inside it.`
+				: messageOf(error);
 		}
 		this.changed();
 	}
@@ -228,7 +243,13 @@ export class Controller {
 			hasMigrations: config.migrations.command !== '',
 			run: this.deps.scripts.lastRun,
 			onBranchChange: config.migrations.onBranchChange,
-			canStartDatabase: config.database.dockerComposeService !== '',
+			server: {
+				configured: config.server.command !== '',
+				running: this.deps.server.isServerRunning(),
+				debugSessions: this.deps.server.runningDebugSessions(),
+				onDatabaseChange: config.server.onDatabaseChange,
+			},
+			canStartDatabase: dockerTarget(config) !== undefined,
 			now: this.now(),
 		};
 	}
@@ -236,11 +257,12 @@ export class Controller {
 	private warnings(config: Config, branch: string | undefined): ViewWarning[] {
 		const warnings: ViewWarning[] = [];
 		if (this.dbStatus === 'error') {
+			const docker = dockerTarget(config);
 			warnings.push({
-				message: config.database.dockerComposeService
-					? `Can't reach the database. Is the "${config.database.dockerComposeService}" container running?`
+				message: docker
+					? `Can't reach the database. Is the "${docker.name}" container running?`
 					: 'Can\'t reach the database server.',
-				action: config.database.dockerComposeService ? { label: 'Start Database', command: 'startDatabase' } : undefined,
+				action: docker ? { label: 'Start Database', command: 'startDatabase' } : undefined,
 			});
 		}
 		if (this.current && !this.current.linked && branch && !isMainBranch(branch, config.database.mainBranches)) {
@@ -271,24 +293,33 @@ export class Controller {
 					return;
 				}
 			}
+			const importData = ready.config.database.importDataOnCreate;
 			const existing = new Set(await ready.engine.listDatabases());
 			const name = await this.deps.ui.input(
 				'New Database',
-				`A copy of ${ready.main.name} for "${branch}". Migrations run on it afterwards.`,
+				importData
+					? `A copy of ${ready.main.name} (schema and data) for "${branch}". Migrations run on it afterwards.`
+					: `An empty database for "${branch}". Migrations run on it afterwards.`,
 				uniqueName(suggestDatabaseName(ready.config.database.newNamePattern, ready.main.name, branch), existing),
 				(value) => validateDatabaseName(value) ?? (existing.has(value) ? `"${value}" already exists.` : undefined),
 			);
 			if (!name) {
 				return;
 			}
-			const copied = await this.copyDatabase(ready, ready.main.name, name, false);
-			if (!copied) {
-				return;
+			if (importData) {
+				const copied = await this.copyDatabase(ready, ready.main.name, name, false);
+				if (!copied) {
+					return;
+				}
+			} else {
+				await this.deps.ui.withProgress(`Creating ${name}`, () => ready.engine.createEmpty(name));
 			}
 			const tips = await this.deps.git.localBranches().catch(() => new Map<string, string>());
 			await this.deps.store.link(branch, name, tips.get(branch));
 			const stamp = new Date(this.now()).toISOString();
-			await this.deps.store.updateMeta(name, { createdAt: stamp, lastCopiedFrom: ready.main.name, lastCopiedAt: stamp });
+			await this.deps.store.updateMeta(name, importData
+				? { createdAt: stamp, lastCopiedFrom: ready.main.name, lastCopiedAt: stamp }
+				: { createdAt: stamp });
 			await this.refresh();
 			if (ready.config.migrations.command) {
 				await this.runMigrationsOn(name, false, true);
@@ -306,7 +337,7 @@ export class Controller {
 			const sources = databases.filter((db) => db !== options.target);
 			const source = options.source ?? await this.deps.ui.pickOne(
 				this.databaseItems(sources, ready, options.target === ready.main.name ? undefined : ready.main.name),
-				'Migrate: copy FROM',
+				'Export Data: copy FROM',
 				'Database to copy from (default: main)',
 			);
 			if (!source) {
@@ -315,7 +346,7 @@ export class Controller {
 			const targets = databases.filter((db) => db !== source);
 			const target = options.target ?? await this.deps.ui.pickOne(
 				this.databaseItems(targets, ready, current === source ? undefined : current),
-				`Migrate: copy ${source} INTO`,
+				`Export Data: copy ${source} INTO`,
 				'Database to replace (default: current)',
 			);
 			if (!target) {
@@ -537,17 +568,20 @@ export class Controller {
 		await this.guard('Starting database', async () => {
 			const root = this.deps.root();
 			const { config } = this.deps.readConfig();
-			if (!root || !config.database.dockerComposeService) {
-				throw new UserError('Set automatedProcesses.database.dockerComposeService to start the database from here.');
+			const docker = dockerTarget(config);
+			if (!root || !docker) {
+				throw new UserError('Set automatedProcesses.database.dockerContainer (or dockerComposeService) to start the database from here.');
 			}
-			const service = config.database.dockerComposeService;
+			const command = docker.kind === 'container'
+				? `docker start ${docker.name}`
+				: `docker compose up --detach --wait ${docker.name}`;
 			const state = await this.deps.scripts.run(
-				{ id: '__start', label: 'Start Database', icon: 'play', env: {}, inputs: {}, steps: [{ label: `docker compose up ${service}`, run: `docker compose up --detach --wait ${service}` }] },
+				{ id: '__start', label: 'Start Database', icon: 'play', env: {}, inputs: {}, steps: [{ label: command, run: command }] },
 				{ env: cleanEnv(this.deps.processEnv), cwd: root, context: { env: {}, inputs: {} } },
 			);
 			await this.refresh();
 			if (state.status === 'failed') {
-				throw new UserError(`Starting "${service}" failed. See the terminal for details.`);
+				throw new UserError(`Starting "${docker.name}" failed. See the terminal for details.`);
 			}
 		});
 	}
@@ -577,6 +611,100 @@ export class Controller {
 
 	cancelRun(): void {
 		this.deps.scripts.cancel();
+	}
+
+	// ── Server ────────────────────────────────────────────────────────────────
+
+	async startServer(): Promise<void> {
+		try {
+			const { config } = this.deps.readConfig();
+			if (!config.server.command) {
+				throw new UserError('No server command. Set automatedProcesses.server.command (e.g. the command that starts your backend).');
+			}
+			await this.deps.server.startServer(config.server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+		} catch (error) {
+			void this.deps.ui.error(messageOf(error));
+		}
+		this.changed();
+	}
+
+	stopServer(): void {
+		this.deps.server.stopServer();
+		this.changed();
+	}
+
+	/** Restarts the server terminal (or starts it) and running debug sessions with the current database. */
+	async restartServer(): Promise<void> {
+		const { config } = this.deps.readConfig();
+		const restarted = await this.restartRunning(config.server.command !== '');
+		if (restarted.length === 0) {
+			void this.deps.ui.info('Nothing to restart: no server or debug session is running.');
+		}
+	}
+
+	/** Runs after any action that changed the current database. */
+	private async restartServersIfPending(): Promise<void> {
+		if (!this.restartPending) {
+			return;
+		}
+		this.restartPending = false;
+		const { config } = this.deps.readConfig();
+		const mode = config.server.onDatabaseChange;
+		const running = [
+			...(this.deps.server.isServerRunning() ? ['server'] : []),
+			...this.deps.server.runningDebugSessions(),
+		];
+		if (mode === 'off' || running.length === 0 || !this.current) {
+			return;
+		}
+		const database = this.current.database;
+		if (mode === 'ask') {
+			// Not awaited: an unanswered notification must not hold up the action that switched.
+			void this.deps.ui.info(`Now using ${database}. Restart ${running.join(', ')} so it uses it too?`, 'Restart')
+				.then((choice) => (choice === 'Restart' ? this.restartRunning(false) : undefined));
+			return;
+		}
+		const restarted = await this.restartRunning(false);
+		if (restarted.length > 0) {
+			void this.deps.ui.info(`Restarted ${restarted.join(', ')} on ${database}.`);
+		}
+	}
+
+	/** Restarts what's running; `startIfStopped` also starts the server terminal when it isn't. */
+	private async restartRunning(startIfStopped: boolean): Promise<string[]> {
+		const restarted: string[] = [];
+		try {
+			const { config } = this.deps.readConfig();
+			if (config.server.command && (this.deps.server.isServerRunning() || startIfStopped)) {
+				await this.deps.server.startServer(config.server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+				restarted.push('server');
+			}
+			restarted.push(...await this.deps.server.restartDebugSessions());
+		} catch (error) {
+			void this.deps.ui.error(`Couldn't restart the server: ${messageOf(error)}`);
+		}
+		this.changed();
+		return restarted;
+	}
+
+	private currentCommandEnv(): EnvMap {
+		const ready = this.readyWithoutEngine();
+		const database = this.current?.database ?? ready.main.name;
+		return buildCommandEnv({
+			processEnv: this.deps.processEnv,
+			config: ready.config,
+			env: ready.env,
+			database,
+			isMain: database === ready.main.name,
+			branch: ready.branch,
+		});
+	}
+
+	private willMigrateAutomatically(branch: string): boolean {
+		const { config } = this.deps.readConfig();
+		// Mirrors afterBranchSwitch: a feature branch without its own database never migrates.
+		const skipsMigrations = !this.current?.linked && !isMainBranch(branch, config.database.mainBranches);
+		return config.migrations.onBranchChange === 'always' && config.migrations.command !== '' && !skipsMigrations;
 	}
 
 	async setInput(scriptId: string, name: string, value: string): Promise<void> {
@@ -809,6 +937,7 @@ export class Controller {
 			password: parts.password,
 			host: parts.host,
 			port: parts.port,
+			dockerContainer: config.database.dockerContainer || undefined,
 			dockerComposeService: config.database.dockerComposeService || undefined,
 			cwd: root,
 			processEnv: cleanEnv(this.deps.processEnv),
@@ -838,6 +967,7 @@ export class Controller {
 			this.busy = undefined;
 			this.changed();
 		}
+		await this.restartServersIfPending();
 	}
 
 	private changed(): void {
@@ -847,6 +977,17 @@ export class Controller {
 	private now(): number {
 		return this.deps.now?.() ?? Date.now();
 	}
+}
+
+/** Where the database runs in Docker, if anywhere. A container wins over a Compose service. */
+function dockerTarget(config: Config): { kind: 'container' | 'compose'; name: string } | undefined {
+	if (config.database.dockerContainer) {
+		return { kind: 'container', name: config.database.dockerContainer };
+	}
+	if (config.database.dockerComposeService) {
+		return { kind: 'compose', name: config.database.dockerComposeService };
+	}
+	return undefined;
 }
 
 function uniqueName(name: string, existing: Set<string>): string {

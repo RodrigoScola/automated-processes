@@ -59,7 +59,8 @@ All under `automatedProcesses.*`. Can be set in user settings or in a project's
 | `env` | `{}` | Extra variables for every command |
 | `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the **current** database. The first one gives the main database URL. |
 | `database.mainBranches` | `["main"]` | Branches that use the main database |
-| `database.dockerComposeService` | `""` | If set, run `psql`/`pg_dump` inside this Compose service; otherwise from PATH |
+| `database.dockerContainer` | `""` | If set, run `psql`/`pg_dump` inside this container (`docker exec`) |
+| `database.dockerComposeService` | `""` | Or inside this Compose service (`docker compose exec`); neither = tools from PATH |
 | `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
 | `database.newNamePattern` | `{main}_{branchShort}` | Suggested name for new databases |
 | `database.onBranchMerged` | `delete` | `delete` / `keep` the databases of branches merged into a main branch (or deleted) |
@@ -201,9 +202,11 @@ The database list comes from the server (`pg_database`).
 
 ### Talking to Postgres
 
-- `database.dockerComposeService` set: run `psql`/`pg_dump`/`pg_restore` with
-  `docker compose exec -T <service> …`. Nothing to install locally. If the container isn't
-  running, offer to start it.
+- `database.dockerContainer` set: run `psql`/`pg_dump`/`pg_restore` with
+  `docker exec -i <container> …`. Nothing to install locally. If the container isn't running,
+  offer to start it (`docker start`).
+- `database.dockerComposeService` set (and no container): the same through
+  `docker compose exec -T <service> …` (`docker compose up --wait` to start it).
 - Otherwise: client tools from PATH.
 - Credentials come from the main URL in the env file; the extension never stores them.
 
@@ -365,7 +368,7 @@ of the settings above, not part of the extension's code. Based on reading the pr
   "automatedProcesses.envFile": ".env",
   "automatedProcesses.database.urlVariables": ["DATABASE_URL", "DATABASE_ADMIN_URL"],
   "automatedProcesses.database.mainBranches": ["staging"],
-  "automatedProcesses.database.dockerComposeService": "db",
+  "automatedProcesses.database.dockerContainer": "carli-db-1",
   "automatedProcesses.database.hidePatterns": ["postgres", "*_test", "*_test_gw*"],
   "automatedProcesses.database.newNamePattern": "{main}_{issue}",
   "automatedProcesses.testDatabase.envFile": ".env.test",

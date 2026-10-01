@@ -2,7 +2,7 @@ import { Config, ConfigResult, DEFAULT_CONFIG } from '../../core/config';
 import { Controller } from '../../core/controller';
 import { EnvMap } from '../../core/envFile';
 import { ProjectEnv } from '../../core/environment';
-import { EnvironmentSink, GitPort, PickItem, SettingsWriter, Ui } from '../../core/ports';
+import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from '../../core/ports';
 import { ClientSettings, DatabaseConnection, DatabaseEngine } from '../../core/postgres';
 import { CommandExecutor, CommandRequest, FileOps, ScriptRunner } from '../../core/scriptRunner';
 import { BranchStore, MemoryKeyValueStore } from '../../core/store';
@@ -174,6 +174,33 @@ export class FakeEnvSink implements EnvironmentSink {
 	}
 }
 
+export class FakeServer implements ServerControl {
+	running = false;
+	sessions: string[] = [];
+	readonly events: string[] = [];
+	lastEnv: EnvMap | undefined;
+
+	isServerRunning() {
+		return this.running;
+	}
+	runningDebugSessions() {
+		return [...this.sessions];
+	}
+	async startServer(command: string, env: EnvMap) {
+		this.events.push(`${this.running ? 'restart' : 'start'} ${command} @ ${env.DATABASE_URL?.split('/').pop()}`);
+		this.running = true;
+		this.lastEnv = env;
+	}
+	stopServer() {
+		this.events.push('stop');
+		this.running = false;
+	}
+	async restartDebugSessions() {
+		this.sessions.forEach((name) => this.events.push(`debug ${name}`));
+		return [...this.sessions];
+	}
+}
+
 export class FakeSettings implements SettingsWriter {
 	readonly updates: [string, unknown][] = [];
 	opened = 0;
@@ -213,6 +240,7 @@ export interface Harness {
 	store: BranchStore;
 	prefs: MemoryKeyValueStore;
 	envSink: FakeEnvSink;
+	server: FakeServer;
 	settings: FakeSettings;
 	engineSettings: ClientSettings[];
 	config: Config;
@@ -231,6 +259,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 		store: new BranchStore(kv, () => new Date('2026-10-01T12:00:00Z')),
 		prefs: new MemoryKeyValueStore(),
 		envSink: new FakeEnvSink(),
+		server: new FakeServer(),
 		settings: new FakeSettings(),
 		engineSettings: [],
 		config: options.config ?? testConfig({ migrations: { command: 'migrate up' } }),
@@ -248,6 +277,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 		prefs: h.prefs,
 		settings: h.settings,
 		envSink: h.envSink,
+		server: h.server,
 		scripts: new ScriptRunner(h.executor, () => undefined, new FakeFiles(), () => 1000),
 		readConfig: (): ConfigResult => ({ config: h.config, problems: options.problems ?? [] }),
 		root: () => root,

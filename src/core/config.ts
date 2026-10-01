@@ -2,6 +2,7 @@
 
 export type BranchChangeMode = 'off' | 'ask' | 'always';
 export type MergedBranchMode = 'delete' | 'keep';
+export type ServerRestartMode = 'restart' | 'ask' | 'off';
 
 export interface ScriptInput {
 	options: string[];
@@ -29,9 +30,12 @@ export interface Config {
 	database: {
 		urlVariables: string[];
 		mainBranches: string[];
+		dockerContainer: string;
 		dockerComposeService: string;
 		hidePatterns: string[];
 		newNamePattern: string;
+		/** New Database copies the main database's data (and schema) into the new one. */
+		importDataOnCreate: boolean;
 		onBranchMerged: MergedBranchMode;
 	};
 	testDatabase: {
@@ -44,6 +48,12 @@ export interface Config {
 		onBranchChange: BranchChangeMode;
 		afterCopy: boolean;
 	};
+	server: {
+		/** Command that runs the app's server in a terminal the extension owns. */
+		command: string;
+		/** What to do with running servers and debug sessions when the current database changes. */
+		onDatabaseChange: ServerRestartMode;
+	};
 	scripts: ScriptDefinition[];
 }
 
@@ -55,9 +65,11 @@ export const DEFAULT_CONFIG: Config = {
 	database: {
 		urlVariables: ['DATABASE_URL'],
 		mainBranches: ['main'],
+		dockerContainer: '',
 		dockerComposeService: '',
 		hidePatterns: ['postgres'],
 		newNamePattern: '{main}_{branchShort}',
+		importDataOnCreate: true,
 		onBranchMerged: 'delete',
 	},
 	testDatabase: {
@@ -69,6 +81,10 @@ export const DEFAULT_CONFIG: Config = {
 		command: '',
 		onBranchChange: 'ask',
 		afterCopy: true,
+	},
+	server: {
+		command: '',
+		onDatabaseChange: 'restart',
 	},
 	scripts: [],
 };
@@ -93,9 +109,11 @@ export function readConfig(read: SettingReader): ConfigResult {
 		database: {
 			urlVariables: strList(read('database.urlVariables'), d.database.urlVariables),
 			mainBranches: strList(read('database.mainBranches'), d.database.mainBranches),
-			dockerComposeService: str(read('database.dockerComposeService'), d.database.dockerComposeService),
+			dockerContainer: str(read('database.dockerContainer'), d.database.dockerContainer, true),
+			dockerComposeService: str(read('database.dockerComposeService'), d.database.dockerComposeService, true),
 			hidePatterns: strList(read('database.hidePatterns'), d.database.hidePatterns, true),
 			newNamePattern: str(read('database.newNamePattern'), d.database.newNamePattern),
+			importDataOnCreate: bool(read('database.importDataOnCreate'), d.database.importDataOnCreate),
 			onBranchMerged: oneOf(read('database.onBranchMerged'), ['delete', 'keep'], d.database.onBranchMerged),
 		},
 		testDatabase: {
@@ -107,6 +125,10 @@ export function readConfig(read: SettingReader): ConfigResult {
 			command: str(read('migrations.command'), d.migrations.command, true),
 			onBranchChange: oneOf(read('migrations.onBranchChange'), ['off', 'ask', 'always'], d.migrations.onBranchChange),
 			afterCopy: bool(read('migrations.afterCopy'), d.migrations.afterCopy),
+		},
+		server: {
+			command: str(read('server.command'), d.server.command, true),
+			onDatabaseChange: oneOf(read('server.onDatabaseChange'), ['restart', 'ask', 'off'], d.server.onDatabaseChange),
 		},
 		scripts: readScripts(read('scripts'), problems),
 	};

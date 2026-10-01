@@ -3,7 +3,7 @@ import { EnvMap } from '../core/envFile';
 import { EnvironmentSink } from '../core/ports';
 
 /** Debug types that launch browsers, where process env doesn't apply. */
-const SKIPPED_DEBUG_TYPES = new Set(['chrome', 'msedge', 'pwa-chrome', 'pwa-msedge', 'pwa-extensionHost', 'extensionHost']);
+export const SKIPPED_DEBUG_TYPES = new Set(['chrome', 'msedge', 'pwa-chrome', 'pwa-msedge', 'pwa-extensionHost', 'extensionHost']);
 
 /**
  * Puts the current database (and env file values) into new terminals through the
@@ -18,6 +18,11 @@ export class VsCodeEnvironmentSink implements EnvironmentSink, vscode.DebugConfi
 		// Values can include passwords from the env file; don't write them to workspace storage.
 		collection.persistent = false;
 		collection.clear();
+	}
+
+	/** What debug launches currently get; used when relaunching a session not from launch.json. */
+	get current(): EnvMap | undefined {
+		return this.additions;
 	}
 
 	apply(additions: EnvMap | undefined, options: { terminals: boolean; description: string }): void {

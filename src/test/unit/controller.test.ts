@@ -41,6 +41,25 @@ suite('Controller: refresh and view state', () => {
 		assert.strictEqual(state.canStartDatabase, true);
 	});
 
+	test('a container setting reaches the engine and enables Start Database', async () => {
+		const h = harness({ config: testConfig({ database: { dockerContainer: 'carli-db-1' } }) });
+		h.engine.failListing = new Error('container not running');
+		await h.controller.start();
+		assert.strictEqual(h.engineSettings[0].dockerContainer, 'carli-db-1');
+		const state = h.controller.snapshot();
+		assert.ok(state.warnings.some((warning) => warning.message.includes('"carli-db-1"') && warning.action?.command === 'startDatabase'));
+		await h.controller.startDatabase();
+		assert.strictEqual(h.executor.requests[0].command, 'docker start carli-db-1');
+	});
+
+	test('a missing psql explains how to use Docker instead', async () => {
+		const h = harness();
+		h.engine.failListing = new Error('"psql" was not found. Is it installed and on PATH?');
+		await h.controller.start();
+		assert.match(h.controller.snapshot().dbError ?? '', /set automatedProcesses\.database\.dockerContainer/);
+		assert.strictEqual(h.controller.snapshot().canStartDatabase, false);
+	});
+
 	test('a missing env variable is a problem and clears the environment', async () => {
 		const h = harness({ env: { main: {} } });
 		await h.controller.start();
@@ -125,6 +144,26 @@ suite('Controller: New Database', () => {
 		assert.match(h.ui.messages('error')[0], /No git branch/);
 	});
 
+	test('importDataOnCreate off creates an empty database, then migrates it', async () => {
+		const h = harness({ config: testConfig({ database: { importDataOnCreate: false }, migrations: { command: 'migrate up' } }) });
+		await h.controller.start();
+		await h.controller.newDatabase();
+		assert.ok(h.engine.calls.includes('createEmpty app_login'));
+		assert.ok(!h.engine.calls.some((call) => call.startsWith('template') || call.startsWith('dump')));
+		assert.match(h.ui.log.find((entry) => entry.kind === 'input')?.detail ?? '', /app_login/);
+		assert.strictEqual(h.store.meta('app_login').lastCopiedFrom, undefined);
+		assert.strictEqual(h.executor.requests.length, 1);
+		assert.strictEqual(h.controller.snapshot().current?.name, 'app_login');
+	});
+
+	test('importDataOnCreate on (default) imports the main database', async () => {
+		const h = harness();
+		assert.strictEqual(h.config.database.importDataOnCreate, true);
+		await h.controller.start();
+		await h.controller.newDatabase();
+		assert.ok(h.engine.calls.includes('template app -> app_login'));
+	});
+
 	test('skips migrations when no command is configured', async () => {
 		const h = harness({ config: testConfig() });
 		await h.controller.start();
@@ -182,7 +221,7 @@ suite('Controller: copying with connections', () => {
 	});
 });
 
-suite('Controller: Migrate', () => {
+suite('Controller: Export Data (migrate)', () => {
 	test('defaults to main → current and replaces the target', async () => {
 		const h = harness({ databases: ['postgres', 'app', 'app_login'] });
 		await h.store.link('feature/login', 'app_login');
@@ -440,6 +479,118 @@ suite('Controller: merged branches', () => {
 		h.engine.failListing = new Error('down');
 		await h.controller.start();
 		assert.ok(h.store.linkOf('gone'), 'link kept for the next try');
+	});
+});
+
+suite('Controller: server restart on database change', () => {
+	const serverConfig = (overrides: { onDatabaseChange?: 'restart' | 'ask' | 'off'; onBranchChange?: 'off' | 'ask' | 'always' } = {}) => testConfig({
+		migrations: { command: 'migrate', onBranchChange: overrides.onBranchChange ?? 'off' },
+		server: { command: 'serve', onDatabaseChange: overrides.onDatabaseChange ?? 'restart' },
+	});
+
+	test('switching the database restarts a running server and debug sessions on the new one', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other'], config: serverConfig() });
+		await h.controller.start();
+		await h.controller.startServer();
+		h.server.sessions = ['Backend: FastAPI'];
+		await h.controller.switchDatabase('other');
+		assert.deepStrictEqual(h.server.events, ['start serve @ app', 'restart serve @ other', 'debug Backend: FastAPI']);
+		assert.ok(h.ui.messages('info').some((message) => message === 'Restarted server, Backend: FastAPI on other.'));
+		assert.strictEqual(h.server.lastEnv?.OTHER, 'x', 'the server gets the env file values too');
+	});
+
+	test('nothing is started when nothing is running', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other'], config: serverConfig() });
+		await h.controller.start();
+		await h.controller.switchDatabase('other');
+		assert.deepStrictEqual(h.server.events, []);
+	});
+
+	test('"off" leaves the server alone and "ask" restarts only when accepted', async () => {
+		const off = harness({ databases: ['postgres', 'app', 'other'], config: serverConfig({ onDatabaseChange: 'off' }) });
+		await off.controller.start();
+		await off.controller.startServer();
+		await off.controller.switchDatabase('other');
+		assert.deepStrictEqual(off.server.events, ['start serve @ app']);
+
+		const ask = harness({ databases: ['postgres', 'app', 'other'], config: serverConfig({ onDatabaseChange: 'ask' }) });
+		await ask.controller.start();
+		await ask.controller.startServer();
+		ask.ui.infoAnswer = (message) => (message.startsWith('Now using other') ? 'Restart' : undefined);
+		await ask.controller.switchDatabase('other');
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepStrictEqual(ask.server.events, ['start serve @ app', 'restart serve @ other']);
+	});
+
+	test('a branch switch restarts once, after automatic migrations', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_x'], config: serverConfig({ onBranchChange: 'always' }) });
+		await h.store.link('x', 'app_x');
+		h.git.branches.set('x', 'c-x');
+		h.git.branch = 'main';
+		await h.controller.start();
+		await h.controller.startServer();
+		const order: string[] = [];
+		h.executor.exitCode = (request) => {
+			order.push(`migrate @ ${request.env.DATABASE_URL.split('/').pop()}`);
+			return 0;
+		};
+		const startServer = h.server.startServer.bind(h.server);
+		h.server.startServer = async (command, env) => {
+			order.push(`server @ ${env.DATABASE_URL.split('/').pop()}`);
+			return startServer(command, env);
+		};
+		h.git.branch = 'x';
+		await h.controller.onGitStateChanged();
+		assert.deepStrictEqual(order, ['migrate @ app_x', 'server @ app_x']);
+	});
+
+	test('a branch switch without automatic migrations restarts right away', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_x'], config: serverConfig({ onBranchChange: 'ask' }) });
+		await h.store.link('x', 'app_x');
+		h.git.branches.set('x', 'c-x');
+		h.git.branch = 'main';
+		await h.controller.start();
+		await h.controller.startServer();
+		h.git.branch = 'x';
+		await h.controller.onGitStateChanged();
+		assert.deepStrictEqual(h.server.events, ['start serve @ app', 'restart serve @ app_x']);
+		assert.strictEqual(h.executor.requests.length, 0, 'migrations still wait for the answer');
+	});
+
+	test('New Database restarts after its migrations', async () => {
+		const h = harness({ config: serverConfig() });
+		await h.controller.start();
+		await h.controller.startServer();
+		await h.controller.newDatabase();
+		assert.deepStrictEqual(h.server.events, ['start serve @ app', 'restart serve @ app_login']);
+		assert.strictEqual(h.executor.requests.length, 1);
+	});
+
+	test('the first refresh never restarts', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_login'], config: serverConfig() });
+		await h.store.setCurrent('app');
+		await h.store.link('feature/login', 'app_login');
+		h.server.running = true;
+		await h.controller.start();
+		assert.deepStrictEqual(h.server.events, []);
+	});
+
+	test('manual start, stop and restart', async () => {
+		const h = harness({ config: serverConfig() });
+		await h.controller.start();
+		await h.controller.restartServer();
+		await h.controller.stopServer();
+		assert.deepStrictEqual(h.server.events, ['start serve @ app', 'stop']);
+		assert.strictEqual(h.controller.snapshot().server.running, false);
+		await h.controller.restartServer();
+		assert.deepStrictEqual(h.server.events.slice(-1), ['start serve @ app']);
+
+		const none = harness();
+		await none.controller.start();
+		await none.controller.startServer();
+		assert.match(none.ui.messages('error')[0], /server\.command/);
+		await none.controller.restartServer();
+		assert.match(none.ui.messages('info')[0], /Nothing to restart/);
 	});
 });
 

@@ -62,6 +62,17 @@ suite('postgres client commands', () => {
 		assert.strictEqual(spec.cwd, '/repo');
 	});
 
+	test('container mode uses docker exec -i, like `docker exec -it carli-db-1 psql`', () => {
+		const spec = clientSpec({ ...docker, dockerContainer: 'carli-db-1' }, 'psql', ['-d', 'simplecare']);
+		assert.strictEqual(spec.command, 'docker');
+		assert.deepStrictEqual(spec.args, ['exec', '-i', '-e', 'PGPASSWORD=pw', 'carli-db-1', 'psql', '-U', 'app', '-d', 'simplecare']);
+	});
+
+	test('a container takes precedence over a Compose service', () => {
+		const spec = clientSpec({ ...docker, dockerContainer: 'c1', password: '' }, 'pg_restore', []);
+		assert.deepStrictEqual(spec.args, ['exec', '-i', 'c1', 'pg_restore', '-U', 'app']);
+	});
+
 	test('docker mode without a password skips -e', () => {
 		const spec = clientSpec({ ...docker, password: '' }, 'pg_dump', []);
 		assert.deepStrictEqual(spec.args, ['compose', 'exec', '-T', 'db', 'pg_dump', '-U', 'app']);

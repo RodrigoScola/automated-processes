@@ -51,7 +51,7 @@
       },
       {
         "command": "automated-processes.migrate",
-        "title": "Migrate (Copy Database)",
+        "title": "Export Data (Copy Database)",
         "category": "Automated Processes",
         "icon": "$(arrow-swap)"
       },
@@ -88,6 +88,21 @@
       {
         "command": "automated-processes.startDatabase",
         "title": "Start Database Container",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.startServer",
+        "title": "Start Server",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.stopServer",
+        "title": "Stop Server",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.restartServer",
+        "title": "Restart Server with Current Database",
         "category": "Automated Processes"
       },
       {
@@ -188,11 +203,17 @@
           "order": 11,
           "markdownDescription": "Branches that use the main database. The first one that exists locally is used to detect merged branches."
         },
-        "automatedProcesses.database.dockerComposeService": {
+        "automatedProcesses.database.dockerContainer": {
           "type": "string",
           "default": "",
           "order": 12,
-          "markdownDescription": "Docker Compose service running PostgreSQL. When set, `psql`, `pg_dump` and `pg_restore` run inside it (`docker compose exec`), so nothing needs installing locally. Leave empty to use the tools from PATH."
+          "markdownDescription": "Docker container running PostgreSQL, e.g. `my-db-1` (the name you'd use in `docker exec -it my-db-1 psql`). When set, `psql`, `pg_dump` and `pg_restore` run inside it, so nothing needs installing locally. Takes precedence over `#automatedProcesses.database.dockerComposeService#`. Leave both empty to use the tools from PATH."
+        },
+        "automatedProcesses.database.dockerComposeService": {
+          "type": "string",
+          "default": "",
+          "order": 13,
+          "markdownDescription": "Docker Compose service running PostgreSQL (`docker compose exec <service>`, run from the workspace folder). Alternative to `#automatedProcesses.database.dockerContainer#`."
         },
         "automatedProcesses.database.hidePatterns": {
           "type": "array",
@@ -202,14 +223,20 @@
           "default": [
             "postgres"
           ],
-          "order": 13,
+          "order": 14,
           "markdownDescription": "Databases hidden from the list (glob patterns, e.g. `*_test`, `*_test_gw*`). Hidden databases are pre-selected in **Clean Up Databases**."
         },
         "automatedProcesses.database.newNamePattern": {
           "type": "string",
           "default": "{main}_{branchShort}",
-          "order": 14,
+          "order": 15,
           "markdownDescription": "Suggested name for new databases. Placeholders: `{main}`, `{branch}`, `{branchShort}` (last part of the branch), `{issue}` (leading number of the branch, else `{branchShort}`)."
+        },
+        "automatedProcesses.database.importDataOnCreate": {
+          "type": "boolean",
+          "default": true,
+          "order": 16,
+          "markdownDescription": "**New Database** imports everything (schema and data) from the main database into the new one, then runs migrations. Turn off to start from an empty database and only run migrations."
         },
         "automatedProcesses.database.onBranchMerged": {
           "type": "string",
@@ -222,7 +249,7 @@
             "Only unlink it; the database stays."
           ],
           "default": "delete",
-          "order": 15,
+          "order": 17,
           "markdownDescription": "What happens to a branch's database when the branch is merged into a main branch or deleted."
         },
         "automatedProcesses.testDatabase.envFile": {
@@ -250,7 +277,7 @@
           "type": "string",
           "default": "",
           "order": 30,
-          "markdownDescription": "Command that applies migrations to the current database, e.g. `npx prisma migrate deploy`. Runs after **New Database**, after **Migrate** (see `#automatedProcesses.migrations.afterCopy#`) and on branch change."
+          "markdownDescription": "Command that applies migrations to the current database, e.g. `npx prisma migrate deploy`. Runs after **New Database**, after **Export Data** (see `#automatedProcesses.migrations.afterCopy#`) and on branch change."
         },
         "automatedProcesses.migrations.onBranchChange": {
           "type": "string",
@@ -272,7 +299,25 @@
           "type": "boolean",
           "default": true,
           "order": 32,
-          "markdownDescription": "Run migrations on the target after **Migrate** copies a database."
+          "markdownDescription": "Run migrations on the target after **Export Data** copies a database."
+        },
+        "automatedProcesses.server.command": {
+          "type": "string",
+          "default": "",
+          "order": 35,
+          "markdownDescription": "Command that starts your app's server, e.g. `uv run uvicorn app.main:app --reload --port 8000`. Start it from the sidebar; it runs with the current database and is restarted when the database changes (see `#automatedProcesses.server.onDatabaseChange#`)."
+        },
+        "automatedProcesses.server.onDatabaseChange": {
+          "type": "string",
+          "enum": ["restart", "ask", "off"],
+          "enumDescriptions": [
+            "Restart the running server and debug sessions so they use the new database.",
+            "Ask before restarting.",
+            "Leave them running on the old database."
+          ],
+          "default": "restart",
+          "order": 36,
+          "markdownDescription": "When the current database changes (branch switch, New Database, Switch Database), restart the server started from the sidebar and running debug sessions (e.g. a backend launched with F5). Servers started by hand in a terminal can't be restarted by the extension."
         },
         "automatedProcesses.scripts": {
           "type": "array",

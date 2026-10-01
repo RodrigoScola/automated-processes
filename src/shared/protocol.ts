@@ -71,6 +71,14 @@ export interface ViewState {
 	hasMigrations: boolean;
 	run?: ViewRun;
 	onBranchChange: BranchChangeMode;
+	server: {
+		/** A server command is configured. */
+		configured: boolean;
+		running: boolean;
+		/** Running debug sessions that are restarted along with the server. */
+		debugSessions: string[];
+		onDatabaseChange: 'restart' | 'ask' | 'off';
+	};
 	canStartDatabase: boolean;
 	now: number;
 }
@@ -84,6 +92,9 @@ export type CommandName =
 	| 'cleanUpDatabases'
 	| 'runMigrations'
 	| 'startDatabase'
+	| 'startServer'
+	| 'stopServer'
+	| 'restartServer'
 	| 'refresh'
 	| 'openSettings'
 	| 'cancelRun'

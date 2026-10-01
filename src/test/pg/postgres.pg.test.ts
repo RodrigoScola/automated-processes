@@ -5,7 +5,8 @@
  *   AP_PG_ROOT=D:\code\carli AP_PG_SERVICE=db npm run test:pg
  *
  * AP_PG_ROOT: folder with the env file (and docker-compose.yml); AP_PG_ENV_FILE (default .env);
- * AP_PG_URL_VARIABLE (default DATABASE_URL); AP_PG_SERVICE: Compose service (empty = local tools).
+ * AP_PG_URL_VARIABLE (default DATABASE_URL); AP_PG_CONTAINER: Docker container (`docker exec`);
+ * AP_PG_SERVICE: Compose service. Neither = local tools.
  */
 import * as assert from 'assert';
 import { databaseName, parseDbUrl } from '../../core/dbUrl';
@@ -36,6 +37,7 @@ suite('PostgreSQL (real server)', function () {
 			password: parts.password,
 			host: parts.host,
 			port: parts.port,
+			dockerContainer: process.env.AP_PG_CONTAINER || undefined,
 			dockerComposeService: process.env.AP_PG_SERVICE || undefined,
 			cwd: root!,
 			processEnv: process.env,

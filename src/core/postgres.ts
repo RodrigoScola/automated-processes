@@ -79,7 +79,9 @@ export interface ClientSettings {
 	password: string;
 	host: string;
 	port?: number;
-	/** Run tools inside this Docker Compose service instead of from PATH. */
+	/** Run tools inside this Docker container (`docker exec`). Takes precedence over the Compose service. */
+	dockerContainer?: string;
+	/** Run tools inside this Docker Compose service (`docker compose exec`) instead of from PATH. */
 	dockerComposeService?: string;
 	/** Folder with the Compose file (Docker mode) or working folder. */
 	cwd: string;
@@ -91,8 +93,17 @@ export const FIELD_SEPARATOR = '\x1f';
 
 /** Command line for one client tool, in Docker or locally. */
 export function clientSpec(settings: ClientSettings, tool: ClientTool, args: string[]): ProcessSpec {
+	const passwordArgs = settings.password ? ['-e', `PGPASSWORD=${settings.password}`] : [];
+	if (settings.dockerContainer) {
+		// -i keeps stdin open so pg_restore can read a piped dump; no -t, output is captured.
+		return {
+			command: 'docker',
+			args: ['exec', '-i', ...passwordArgs, settings.dockerContainer, tool, '-U', settings.user, ...args],
+			cwd: settings.cwd,
+			env: settings.processEnv,
+		};
+	}
 	if (settings.dockerComposeService) {
-		const passwordArgs = settings.password ? ['-e', `PGPASSWORD=${settings.password}`] : [];
 		return {
 			command: 'docker',
 			args: ['compose', 'exec', '-T', ...passwordArgs, settings.dockerComposeService, tool, '-U', settings.user, ...args],
@@ -198,6 +209,11 @@ export class PostgresEngine implements DatabaseEngine {
 export function describeFailure(tool: string, result: ProcessResult): string {
 	const detail = result.stderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
 	return `${tool} failed (exit code ${result.code})${detail ? `: ${detail}` : '.'}`;
+}
+
+/** True when a client tool or docker itself couldn't be started. */
+export function isToolMissing(error: unknown): boolean {
+	return error instanceof Error && /was not found/.test(error.message);
 }
 
 /** True when CREATE DATABASE … TEMPLATE failed because the template is in use. */
