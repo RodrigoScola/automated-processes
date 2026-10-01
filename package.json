@@ -3,8 +3,16 @@
   "displayName": "Automated Processes",
   "description": "Per-branch PostgreSQL databases and one-click project scripts.",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "rodrigo",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RodrigoScola/automated-processes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RodrigoScola/automated-processes/issues"
+  },
+  "homepage": "https://github.com/RodrigoScola/automated-processes#readme",
   "engines": {
     "vscode": "^1.138.0"
   },
@@ -35,31 +43,96 @@
       ]
     },
     "commands": [
-      { "command": "automated-processes.newDatabase", "title": "New Database", "category": "Automated Processes", "icon": "$(add)" },
-      { "command": "automated-processes.migrate", "title": "Migrate (Copy Database)", "category": "Automated Processes", "icon": "$(arrow-swap)" },
-      { "command": "automated-processes.switchDatabase", "title": "Switch Database", "category": "Automated Processes" },
-      { "command": "automated-processes.switchBack", "title": "Switch Back to Previous Database", "category": "Automated Processes" },
-      { "command": "automated-processes.removeDatabase", "title": "Remove Database", "category": "Automated Processes" },
-      { "command": "automated-processes.cleanUpDatabases", "title": "Clean Up Databases", "category": "Automated Processes" },
-      { "command": "automated-processes.runMigrations", "title": "Run Migrations", "category": "Automated Processes" },
-      { "command": "automated-processes.runScript", "title": "Run Script", "category": "Automated Processes" },
-      { "command": "automated-processes.startDatabase", "title": "Start Database Container", "category": "Automated Processes" },
-      { "command": "automated-processes.refresh", "title": "Refresh", "category": "Automated Processes", "icon": "$(refresh)" },
-      { "command": "automated-processes.openSettings", "title": "Open Settings", "category": "Automated Processes", "icon": "$(settings-gear)" },
-      { "command": "automated-processes.cancelRun", "title": "Stop Running Script", "category": "Automated Processes" },
-      { "command": "automated-processes.showOutput", "title": "Show Script Output", "category": "Automated Processes" }
+      {
+        "command": "automated-processes.newDatabase",
+        "title": "New Database",
+        "category": "Automated Processes",
+        "icon": "$(add)"
+      },
+      {
+        "command": "automated-processes.migrate",
+        "title": "Migrate (Copy Database)",
+        "category": "Automated Processes",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "automated-processes.switchDatabase",
+        "title": "Switch Database",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.switchBack",
+        "title": "Switch Back to Previous Database",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.removeDatabase",
+        "title": "Remove Database",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.cleanUpDatabases",
+        "title": "Clean Up Databases",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.runMigrations",
+        "title": "Run Migrations",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.runScript",
+        "title": "Run Script",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.startDatabase",
+        "title": "Start Database Container",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.refresh",
+        "title": "Refresh",
+        "category": "Automated Processes",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "automated-processes.openSettings",
+        "title": "Open Settings",
+        "category": "Automated Processes",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "automated-processes.cancelRun",
+        "title": "Stop Running Script",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.showOutput",
+        "title": "Show Script Output",
+        "category": "Automated Processes"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "automated-processes.openSettings", "when": "view == automatedProcesses.sidebar", "group": "navigation" }
+        {
+          "command": "automated-processes.openSettings",
+          "when": "view == automatedProcesses.sidebar",
+          "group": "navigation"
+        }
       ]
     },
     "taskDefinitions": [
       {
         "type": "automatedProcesses",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Internal run id." }
+          "id": {
+            "type": "string",
+            "description": "Internal run id."
+          }
         }
       }
     ],
@@ -81,7 +154,9 @@
         "automatedProcesses.env": {
           "type": "object",
           "default": {},
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "order": 3,
           "markdownDescription": "Extra environment variables for every command. Supports placeholders such as `${db.url}`, `${db.name}`, `${testDb.url}`, `${env:NAME}` and `${branch}`."
         },
@@ -93,15 +168,23 @@
         },
         "automatedProcesses.database.urlVariables": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["DATABASE_URL"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "DATABASE_URL"
+          ],
           "order": 10,
           "markdownDescription": "Variables pointed at the **current** database. The first one, read from the env file, defines the main database and the server."
         },
         "automatedProcesses.database.mainBranches": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["main"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main"
+          ],
           "order": 11,
           "markdownDescription": "Branches that use the main database. The first one that exists locally is used to detect merged branches."
         },
@@ -113,8 +196,12 @@
         },
         "automatedProcesses.database.hidePatterns": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["postgres"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "postgres"
+          ],
           "order": 13,
           "markdownDescription": "Databases hidden from the list (glob patterns, e.g. `*_test`, `*_test_gw*`). Hidden databases are pre-selected in **Clean Up Databases**."
         },
@@ -126,7 +213,10 @@
         },
         "automatedProcesses.database.onBranchMerged": {
           "type": "string",
-          "enum": ["delete", "keep"],
+          "enum": [
+            "delete",
+            "keep"
+          ],
           "enumDescriptions": [
             "Drop the database (and its test databases) of a branch once it's merged into a main branch or deleted.",
             "Only unlink it; the database stays."
@@ -143,7 +233,9 @@
         },
         "automatedProcesses.testDatabase.urlVariables": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "order": 21,
           "markdownDescription": "Variables pointed at the current **test** database (e.g. `TEST_DATABASE_URL`). Empty turns per-branch test databases off. The extension only points them; the test suite creates the database."
@@ -162,7 +254,11 @@
         },
         "automatedProcesses.migrations.onBranchChange": {
           "type": "string",
-          "enum": ["off", "ask", "always"],
+          "enum": [
+            "off",
+            "ask",
+            "always"
+          ],
           "enumDescriptions": [
             "Never run migrations on branch change.",
             "Ask after each branch change.",
@@ -185,15 +281,29 @@
           "markdownDescription": "Script buttons for the sidebar. Each script runs its steps in order and stops at the first failure. Edit in `settings.json`.",
           "items": {
             "type": "object",
-            "required": ["label", "steps"],
+            "required": [
+              "label",
+              "steps"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "description": "Stable id (defaults to the label)." },
-              "label": { "type": "string", "description": "Button text." },
-              "icon": { "type": "string", "description": "Codicon name, e.g. tools, checklist, sparkle." },
+              "id": {
+                "type": "string",
+                "description": "Stable id (defaults to the label)."
+              },
+              "label": {
+                "type": "string",
+                "description": "Button text."
+              },
+              "icon": {
+                "type": "string",
+                "description": "Codicon name, e.g. tools, checklist, sparkle."
+              },
               "env": {
                 "type": "object",
-                "additionalProperties": { "type": "string" },
+                "additionalProperties": {
+                  "type": "string"
+                },
                 "description": "Extra environment variables for this script. Placeholders allowed."
               },
               "inputs": {
@@ -201,10 +311,20 @@
                 "description": "Dropdowns shown next to the button, used in commands as ${input:NAME}.",
                 "additionalProperties": {
                   "type": "object",
-                  "required": ["options"],
+                  "required": [
+                    "options"
+                  ],
                   "properties": {
-                    "options": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-                    "default": { "type": "string" }
+                    "options": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1
+                    },
+                    "default": {
+                      "type": "string"
+                    }
                   }
                 }
               },
@@ -214,15 +334,31 @@
                 "items": {
                   "type": "object",
                   "properties": {
-                    "label": { "type": "string" },
-                    "run": { "type": "string", "description": "Shell command. Placeholders allowed." },
+                    "label": {
+                      "type": "string"
+                    },
+                    "run": {
+                      "type": "string",
+                      "description": "Shell command. Placeholders allowed."
+                    },
                     "copyFile": {
                       "type": "object",
-                      "required": ["from", "to"],
+                      "required": [
+                        "from",
+                        "to"
+                      ],
                       "properties": {
-                        "from": { "type": "string" },
-                        "to": { "type": "string" },
-                        "ifMissing": { "type": "boolean", "default": true, "description": "Skip when the target already exists." }
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "ifMissing": {
+                          "type": "boolean",
+                          "default": true,
+                          "description": "Skip when the target already exists."
+                        }
                       }
                     }
                   }

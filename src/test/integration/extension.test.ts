@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { Controller } from '../../core/controller';
 
-const EXTENSION_ID = 'local.automated-processes';
+const EXTENSION_ID = 'rodrigo.automated-processes';
 
 suite('Extension (in VS Code)', function () {
 	this.timeout(60_000);
