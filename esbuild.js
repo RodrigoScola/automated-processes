@@ -1,4 +1,6 @@
 const esbuild = require("esbuild");
+const fs = require("fs");
+const path = require("path");
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -23,8 +25,23 @@ const esbuildProblemMatcherPlugin = {
 	},
 };
 
+/** Copies the sidebar's static files (styles and the codicon font) next to its bundle. */
+function copyWebviewAssets() {
+	const target = path.join(__dirname, 'dist', 'webview');
+	fs.mkdirSync(target, { recursive: true });
+	const codicons = path.join(__dirname, 'node_modules', '@vscode', 'codicons', 'dist');
+	for (const [from, name] of [
+		[path.join(__dirname, 'src', 'webview', 'styles.css'), 'styles.css'],
+		[path.join(codicons, 'codicon.css'), 'codicon.css'],
+		[path.join(codicons, 'codicon.ttf'), 'codicon.ttf'],
+	]) {
+		fs.copyFileSync(from, path.join(target, name));
+	}
+}
+
 async function main() {
-	const ctx = await esbuild.context({
+	copyWebviewAssets();
+	const extension = await esbuild.context({
 		entryPoints: [
 			'src/extension.ts'
 		],
@@ -42,11 +59,27 @@ async function main() {
 			esbuildProblemMatcherPlugin,
 		],
 	});
+	const webview = await esbuild.context({
+		entryPoints: ['src/webview/main.ts'],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		target: 'es2022',
+		outfile: 'dist/webview/main.js',
+		logLevel: 'silent',
+		plugins: [esbuildProblemMatcherPlugin],
+	});
 	if (watch) {
-		await ctx.watch();
+		await extension.watch();
+		await webview.watch();
 	} else {
-		await ctx.rebuild();
-		await ctx.dispose();
+		await extension.rebuild();
+		await webview.rebuild();
+		await extension.dispose();
+		await webview.dispose();
 	}
 }
 

@@ -1,0 +1,13 @@
+{
+	"automatedProcesses.database.mainBranches": ["main"],
+	"automatedProcesses.migrations.onBranchChange": "off",
+	"automatedProcesses.scripts": [
+		{
+			"id": "print-env",
+			"label": "Print Env",
+			"icon": "beaker",
+			"env": { "SCRIPT_VAR": "${db.name}" },
+			"steps": [{ "label": "Write env", "run": "node print-env.js" }]
+		}
+	]
+}

@@ -1,71 +1,123 @@
-# automated-processes README
+# Automated Processes
 
-This is the README for your extension "automated-processes". After writing up a brief description, we recommend including the following sections.
+A VS Code extension that gives each git branch its own PostgreSQL database and turns project
+scripts into sidebar buttons. It knows nothing about any particular project: everything
+project-specific is a VS Code setting (`automatedProcesses.*`).
 
-## Features
+- **Per-branch databases.** `New Database` copies the main database for the current branch and
+  runs migrations on it. Switching branches switches the database. `Migrate` copies any
+  database into any other. Databases of merged branches are dropped (or kept, by setting).
+- **No `.env` editing.** The current database is passed to scripts, new terminals and debug
+  sessions as environment variables, which override `.env` in most frameworks.
+- **Works on Windows.** With `loadEnvFileIntoCommands` (on by default), every value from `.env` is
+  passed to commands, for tools that only read real environment variables.
+- **Script buttons.** Steps run one after another as VS Code tasks and stop at the first
+  failure. The sidebar shows each step's state.
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+The design and decisions are in [PLAN.md](PLAN.md).
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- PostgreSQL, either in a Docker Compose service (`database.dockerComposeService`; nothing to
+  install locally) or with `psql`, `pg_dump` and `pg_restore` on PATH.
+- The user in the database URL needs the `CREATEDB` permission.
 
-## Extension Settings
+## Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+| Setting | Default | What it does |
+|---|---|---|
+| `envFile` | `.env` | Env file with the database URL (read only) |
+| `loadEnvFileIntoCommands` | `true` | Pass env file values to every command |
+| `env` | `{}` | Extra variables for every command (placeholders allowed) |
+| `applyToTerminals` | `true` | Current database in new terminals |
+| `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the current database; the first defines main |
+| `database.mainBranches` | `["main"]` | Branches that use the main database |
+| `database.dockerComposeService` | `""` | Run Postgres tools in this Compose service |
+| `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
+| `database.newNamePattern` | `{main}_{branchShort}` | Suggested new database name (`{main}`, `{branch}`, `{branchShort}`, `{issue}`) |
+| `database.onBranchMerged` | `delete` | `delete` or `keep` databases of merged/deleted branches |
+| `testDatabase.envFile` | `""` | Env file with the test URL (empty = `envFile`) |
+| `testDatabase.urlVariables` | `[]` | Variables pointed at the per-branch test database |
+| `testDatabase.nameSuffix` | `_test` | Test database = branch database + suffix |
+| `migrations.command` | `""` | Command that applies migrations |
+| `migrations.onBranchChange` | `ask` | `off` / `ask` / `always` |
+| `migrations.afterCopy` | `true` | Run migrations after `Migrate` |
+| `scripts` | `[]` | Sidebar script buttons |
 
-For example:
+Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`, `${db.mainUrl}`,
+`${testDb.name}`, `${testDb.url}`, `${env:NAME}`, `${input:NAME}`, `${branch}`.
 
-This extension contributes the following settings:
+### Example
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+```jsonc
+{
+  "automatedProcesses.database.urlVariables": ["DATABASE_URL", "DATABASE_ADMIN_URL"],
+  "automatedProcesses.database.mainBranches": ["staging"],
+  "automatedProcesses.database.dockerComposeService": "db",
+  "automatedProcesses.database.hidePatterns": ["postgres", "*_test", "*_test_gw*"],
+  "automatedProcesses.database.newNamePattern": "{main}_{issue}",
+  "automatedProcesses.testDatabase.envFile": ".env.test",
+  "automatedProcesses.testDatabase.urlVariables": ["TEST_DATABASE_URL"],
+  "automatedProcesses.migrations.command": "uv run python -m carli_core.migrations.runner",
+  "automatedProcesses.scripts": [
+    {
+      "id": "setup", "label": "Setup", "icon": "tools",
+      "steps": [
+        { "label": "Create .env", "copyFile": { "from": ".env.example", "to": ".env", "ifMissing": true } },
+        { "label": "Python dependencies", "run": "uv sync --frozen" },
+        { "label": "Node dependencies", "run": "npm ci" },
+        { "label": "Start database", "run": "docker compose up --build --detach --wait db" },
+        { "label": "Migrations", "run": "uv run python -m carli_core.migrations.runner" },
+        { "label": "Seed", "run": "uv run python -m carli_platform.scripts.seed_local" }
+      ]
+    },
+    {
+      "id": "seed", "label": "Seed", "icon": "sparkle",
+      "steps": [{ "label": "Seed", "run": "uv run python -m carli_platform.scripts.seed_local" }]
+    },
+    {
+      "id": "ci", "label": "Check CI", "icon": "checklist",
+      "inputs": { "suite": { "options": ["backend", "application", "api", "audit-auth", "solver", "frontend", "all"], "default": "backend" } },
+      "env": { "MIGRATION_SMOKE_ADMIN_URL": "${db.url}" },
+      "steps": [
+        { "label": "Architecture", "run": "uv run python scripts/check_architecture.py" },
+        { "label": "Lint", "run": "uv run ruff check backend scripts tests" },
+        { "label": "Types (Python)", "run": "uv run pyright backend/carli_api" },
+        { "label": "Frontend typecheck", "run": "npm run typecheck" },
+        { "label": "Frontend tests", "run": "npm test" },
+        { "label": "Frontend build", "run": "npm run build" },
+        { "label": "Harness", "run": "uv run python scripts/ci/run_harness.py ${input:suite}" },
+        { "label": "Database harness", "run": "uv run python scripts/ci/run_harness.py database" }
+      ]
+    }
+  ]
+}
+```
 
-## Known Issues
+## Development
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+| Command | What it does |
+|---|---|
+| `npm run compile` | Type-check, lint, bundle the extension and the sidebar |
+| `npm run test:unit` | Unit tests (Node, no VS Code), about a second |
+| `npm test` | Integration tests in a downloaded VS Code, against `test/fixtures/workspace` |
+| `npm run test:pg` | Opt-in tests against a real PostgreSQL server (see below) |
 
-## Release Notes
+`test:pg` only creates and drops databases named `ap_selftest_*`:
 
-Users appreciate release notes as you update your extension.
+```powershell
+$env:AP_PG_ROOT = 'D:\code\carli'; $env:AP_PG_SERVICE = 'db'
+$env:AP_PG_COPY_MAIN = '1'   # optional: also pg_dump the main database (read-only) into a scratch copy
+npm run test:pg
+```
 
-### 1.0.0
+Press **F5** and pick **Run Extension on ../carli** to try it on a project.
 
-Initial release of ...
+### Layout
 
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- `src/core/`: all logic, no `vscode` imports (settings, URLs, names, env building, branch rules,
+  Postgres, script runner, the `Controller` with every user flow).
+- `src/vscode/`: thin VS Code adapters (dialogs, git, tasks, terminals/debug env, settings,
+  sidebar, status bar).
+- `src/webview/`: sidebar UI. `render.ts` is a pure state → HTML function.
+- `src/shared/protocol.ts`: messages between the extension and the sidebar.

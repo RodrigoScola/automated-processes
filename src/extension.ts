@@ -1,26 +1,169 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
+import * as path from 'path';
 import * as vscode from 'vscode';
+import { Config } from './core/config';
+import { Controller } from './core/controller';
+import { readEnvFile } from './core/envFile';
+import { ProjectEnv } from './core/environment';
+import { PostgresEngine } from './core/postgres';
+import { ScriptRunner } from './core/scriptRunner';
+import { BranchStore } from './core/store';
+import { WebviewMessage } from './shared/protocol';
+import { VsCodeEnvironmentSink } from './vscode/environment';
+import { VsCodeGit } from './vscode/git';
+import { readSettings, SECTION, VsCodeSettings } from './vscode/settings';
+import { SIDEBAR_VIEW_ID, SidebarProvider } from './vscode/sidebar';
+import { StatusBar } from './vscode/statusBar';
+import { TaskExecutor } from './vscode/taskExecutor';
+import { VsCodeUi } from './vscode/ui';
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+export const COMMAND_PREFIX = 'automated-processes';
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "automated-processes" is now active!');
+export async function activate(context: vscode.ExtensionContext): Promise<Controller> {
+	const folder = vscode.workspace.workspaceFolders?.[0];
+	const root = folder?.uri.fsPath;
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('automated-processes.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from automated-processes!');
+	const executor = new TaskExecutor(folder);
+	const git = new VsCodeGit(root ?? '');
+	const envSink = new VsCodeEnvironmentSink(context);
+	const statusBar = new StatusBar();
+	let sidebar: SidebarProvider | undefined;
+
+	const controller: Controller = new Controller({
+		ui: new VsCodeUi(),
+		git,
+		store: new BranchStore(context.workspaceState),
+		prefs: context.workspaceState,
+		settings: new VsCodeSettings(folder),
+		envSink,
+		scripts: new ScriptRunner(executor, () => notify()),
+		readConfig: () => readSettings(folder),
+		root: () => root,
+		readEnv,
+		createEngine: (settings) => new PostgresEngine(settings),
+		processEnv: process.env,
+		onDidChange: () => notify(),
 	});
 
-	context.subscriptions.push(disposable);
+	function notify(): void {
+		const state = controller.snapshot();
+		sidebar?.update();
+		statusBar.update(state);
+	}
+
+	sidebar = new SidebarProvider(context.extensionUri, () => controller.snapshot(), (message) => void handleMessage(controller, executor, message));
+
+	context.subscriptions.push(
+		git,
+		statusBar,
+		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
+		vscode.debug.registerDebugConfigurationProvider('*', envSink),
+		...registerCommands(controller, executor),
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration(SECTION)) {
+				void controller.refresh();
+			}
+		}),
+	);
+
+	if (root) {
+		const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '.env*'));
+		const onEnvChange = debounce(() => void controller.refresh(), 300);
+		context.subscriptions.push(watcher, watcher.onDidChange(onEnvChange), watcher.onDidCreate(onEnvChange), watcher.onDidDelete(onEnvChange));
+
+		const onGit = debounce(() => void controller.onGitStateChanged(), 200);
+		const onGitSettled = debounce(() => void controller.checkFinishedBranches(), 3000);
+		context.subscriptions.push(git.onDidChange(() => {
+			onGit();
+			onGitSettled();
+		}));
+		await git.initialize().catch(() => undefined);
+	}
+
+	await controller.start();
+	return controller;
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate(): void {}
+
+function readEnv(root: string, config: Config): ProjectEnv {
+	const main = readEnvFile(root, config.envFile);
+	if (!main) {
+		throw new Error(`${config.envFile} not found in ${path.basename(root)}.`);
+	}
+	const test = config.testDatabase.envFile ? readEnvFile(root, config.testDatabase.envFile) ?? {} : main;
+	return { main, test };
+}
+
+function registerCommands(controller: Controller, executor: TaskExecutor): vscode.Disposable[] {
+	const commands: Record<string, (...args: unknown[]) => unknown> = {
+		newDatabase: () => controller.newDatabase(),
+		migrate: () => controller.migrate(),
+		switchDatabase: (name?: unknown) => controller.switchDatabase(typeof name === 'string' ? name : undefined),
+		switchBack: () => controller.switchBack(),
+		removeDatabase: (name?: unknown) => controller.removeDatabase(typeof name === 'string' ? name : undefined),
+		cleanUpDatabases: () => controller.cleanUpDatabases(),
+		runMigrations: () => controller.runMigrations(),
+		runScript: async (id?: unknown) => {
+			const scriptId = typeof id === 'string' ? id : await pickScript(controller);
+			if (scriptId) {
+				await controller.runScript(scriptId);
+			}
+		},
+		startDatabase: () => controller.startDatabase(),
+		refresh: () => controller.refresh(),
+		openSettings: () => controller.openSettings(),
+		cancelRun: () => controller.cancelRun(),
+		showOutput: () => executor.showOutput(),
+	};
+	return Object.entries(commands).map(([name, handler]) =>
+		vscode.commands.registerCommand(`${COMMAND_PREFIX}.${name}`, handler),
+	);
+}
+
+async function pickScript(controller: Controller): Promise<string | undefined> {
+	const scripts = controller.snapshot().scripts;
+	if (scripts.length === 0) {
+		void vscode.window.showInformationMessage('No scripts configured. Add them to automatedProcesses.scripts.');
+		return undefined;
+	}
+	const picked = await vscode.window.showQuickPick(
+		scripts.map((script) => ({ label: `$(${script.icon}) ${script.label}`, detail: script.steps.join(' → '), id: script.id })),
+		{ title: 'Run Script' },
+	);
+	return picked?.id;
+}
+
+async function handleMessage(controller: Controller, executor: TaskExecutor, message: WebviewMessage): Promise<void> {
+	switch (message.type) {
+		case 'command':
+			if (message.command === 'showOutput') {
+				executor.showOutput();
+			} else {
+				await vscode.commands.executeCommand(`${COMMAND_PREFIX}.${message.command}`, message.database);
+			}
+			return;
+		case 'migrateFrom':
+			return controller.migrate({ source: message.database });
+		case 'migrateTo':
+			return controller.migrate({ target: message.database });
+		case 'runScript':
+			await controller.runScript(message.scriptId, message.step);
+			return;
+		case 'setInput':
+			return controller.setInput(message.scriptId, message.name, message.value);
+		case 'setShowHidden':
+			return controller.setShowHidden(message.value);
+		case 'setOnBranchChange':
+			return controller.setOnBranchChange(message.value);
+	}
+}
+
+function debounce(action: () => void, wait: number): () => void {
+	let timer: NodeJS.Timeout | undefined;
+	return () => {
+		if (timer) {
+			clearTimeout(timer);
+		}
+		timer = setTimeout(action, wait);
+	};
+}
