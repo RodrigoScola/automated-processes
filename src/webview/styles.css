@@ -250,7 +250,14 @@ body {
 }
 
 .hidden-toggle {
-	font-size: 12px;
+	font-size: 11px;
+	opacity: 0.55;
+	transition: opacity 0.15s;
+}
+
+.hidden-toggle:hover,
+.hidden-toggle:focus-within {
+	opacity: 1;
 }
 
 /* ── Server ───────────────────────────────────────────────────────────── */
@@ -414,13 +421,6 @@ body {
 
 .branch-mode {
 	width: 90px;
-}
-
-.footer-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	align-self: flex-start;
 }
 
 /* ── Busy bar ─────────────────────────────────────────────────────────── */

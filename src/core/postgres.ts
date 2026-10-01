@@ -12,6 +12,8 @@ export interface DatabaseConnection {
 
 /** What the extension needs from a database server. PostgreSQL is the only implementation. */
 export interface DatabaseEngine {
+	/** Runs SQL against `database` (default: the maintenance database) and returns the rows. */
+	query(sql: string, database?: string): Promise<string[][]>;
 	listDatabases(): Promise<string[]>;
 	connections(database: string): Promise<DatabaseConnection[]>;
 	terminateConnections(database: string): Promise<number>;

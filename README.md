@@ -44,6 +44,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 | `migrations.command` | `""` | Command that applies migrations |
 | `migrations.onBranchChange` | `ask` | `off` / `ask` / `always` |
 | `migrations.afterCopy` | `true` | Run migrations after **Export Data** |
+| `migrations.streams` | `[]` | Migration histories for **Sync Migrations** (see below) |
 | `server.command` | `""` | Command that starts your server (Start/Stop/Restart in the sidebar) |
 | `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
 | `scripts` | `[]` | Sidebar script buttons |
@@ -64,6 +65,24 @@ Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`,
   "automatedProcesses.testDatabase.urlVariables": ["TEST_DATABASE_URL"],
   "automatedProcesses.migrations.command": "uv run python -m carli_core.migrations.runner",
   "automatedProcesses.server.command": "uv run uvicorn carli_api.main:app --reload --port 8000",
+  "automatedProcesses.migrations.streams": [
+    {
+      "name": "tenant",
+      "versionQuery": "SELECT version_num FROM goodoaks.alembic_version",
+      "versionsPath": "backend/migrations/versions",
+      "cwd": "backend",
+      "downgradeCommand": "uv run --no-sync alembic downgrade ${revision}",
+      "env": { "UV_PROJECT_ENVIRONMENT": "${workspaceFolder}/.venv" }
+    },
+    {
+      "name": "public",
+      "versionQuery": "SELECT version_num FROM public.alembic_version_public",
+      "versionsPath": "backend/migrations_public/versions",
+      "cwd": "backend",
+      "downgradeCommand": "uv run --no-sync alembic -c alembic_public.ini downgrade ${revision}",
+      "env": { "UV_PROJECT_ENVIRONMENT": "${workspaceFolder}/.venv" }
+    }
+  ],
   "automatedProcesses.scripts": [
     {
       "id": "setup", "label": "Setup", "icon": "tools",
@@ -98,6 +117,24 @@ Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`,
   ]
 }
 ```
+
+### Sync Migrations
+
+When a database got migrated from another branch, **Sync Migrations** puts it back:
+
+1. For each stream, it reads the applied revisions (`versionQuery`) and the migration files of this
+   branch (`versionsPath`). Applied revisions this branch doesn't have are foreign.
+2. It finds the branch that added them (`git log -S`), reads that branch's files and follows
+   `down_revision` back to the last revision this branch knows.
+3. After you confirm, it checks that branch out into a temporary git worktree and runs
+   `downgradeCommand` there with `${revision}` = that last known revision. Only the other
+   branch's code can undo its own migrations. Your checkout isn't touched; the worktree is
+   removed afterwards.
+4. It runs this branch's `migrations.command`.
+
+List the streams in the order they should be reverted (for Alembic with two streams: the one that
+depends on the other first). In the example, `UV_PROJECT_ENVIRONMENT` makes the worktree reuse the
+main checkout's virtualenv instead of creating a new one.
 
 ## Development
 

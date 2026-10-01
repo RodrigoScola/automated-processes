@@ -1,5 +1,8 @@
 import * as assert from 'assert';
+import * as path from 'path';
+import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from '../../core/migrationSync';
 import { harness, MAIN_URL, testConfig } from './fakes';
+import { migration } from './migrationSync.test';
 
 const SESSION = { pid: 1, application: 'uvicorn', client: '172.18.0.1', user: 'app', state: 'idle' };
 
@@ -21,6 +24,13 @@ suite('Controller: refresh and view state', () => {
 		assert.strictEqual(h.engineSettings[0].user, 'app');
 		assert.strictEqual(h.engineSettings[0].password, 'secret');
 		assert.strictEqual(h.engineSettings[0].port, 5433);
+	});
+
+	test('the list shows main first, then the current database, then the rest by name', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_a', 'app_b', 'app_login', 'app_z'] });
+		await h.store.link('feature/login', 'app_login');
+		await h.controller.start();
+		assert.deepStrictEqual(h.controller.snapshot().databases.map((db) => db.name), ['app', 'app_login', 'app_a', 'app_b', 'app_z']);
 	});
 
 	test('showing hidden databases is remembered', async () => {
@@ -594,6 +604,130 @@ suite('Controller: server restart on database change', () => {
 	});
 });
 
+suite('Controller: Sync Migrations', () => {
+	const stream = (name: string, query: string, dir: string, command: string, env: Record<string, string> = {}) => ({
+		name,
+		versionQuery: query,
+		versionsPath: dir,
+		downgradeCommand: command,
+		cwd: 'backend',
+		env,
+		revisionPattern: DEFAULT_REVISION_PATTERN,
+		downRevisionPattern: DEFAULT_DOWN_REVISION_PATTERN,
+	});
+	const streams = [
+		stream('tenant', 'SELECT v FROM t', 'mig', 'down ${revision}', { VENV: '${workspaceFolder}/.venv' }),
+		stream('public', 'SELECT v FROM p', 'pub', 'pdown ${revision}'),
+	];
+
+	/** This branch has a1 ← a2 and p1; branch "other" also has o1 ← o2 (on a2) and q1 (on p1). */
+	function setup(options: { applied?: [string, string]; database?: string; withStreams?: boolean } = {}) {
+		const h = harness({
+			databases: ['postgres', 'app', 'app_login'],
+			config: testConfig({ migrations: { command: 'migrate up', streams: options.withStreams === false ? [] : streams } }),
+		});
+		const files: [string, string, string | string[] | null][] = [['mig/a1.py', 'a1', null], ['mig/a2.py', 'a2', 'a1'], ['pub/p1.py', 'p1', null]];
+		for (const [file, revision, down] of files) {
+			h.git.setFile('', file, migration(revision, down));
+			h.git.setFile('other', file, migration(revision, down));
+		}
+		h.git.setFile('other', 'mig/o1.py', migration('o1', 'a2'));
+		h.git.setFile('other', 'mig/o2.py', migration('o2', 'o1'));
+		h.git.setFile('other', 'pub/q1.py', migration('q1', 'p1'));
+		h.git.setFile('', 'mig/__init__.py', '');
+		h.git.origins.set('o2', ['feature/login', 'other']);
+		h.git.origins.set('q1', ['other']);
+		const database = options.database ?? 'app';
+		const [tenant, pub] = options.applied ?? ['o2', 'q1'];
+		h.engine.results.set(`${database}|SELECT v FROM t`, [[tenant]]);
+		h.engine.results.set(`${database}|SELECT v FROM p`, [[pub]]);
+		return h;
+	}
+
+	test('reverts each stream with the other branch\'s code, then runs this branch\'s migrations', async () => {
+		const h = setup();
+		await h.controller.start();
+		await h.controller.syncMigrations();
+		assert.deepStrictEqual(h.ui.messages('error'), []);
+		const confirm = h.ui.log.find((entry) => entry.kind === 'confirm');
+		assert.strictEqual(confirm?.message, 'Revert migrations from other branches on app?');
+		assert.match(confirm?.detail ?? '', /tenant: undo 2 migrations from "other" \(o2, o1\), back to a2\./);
+		assert.match(confirm?.detail ?? '', /public: undo 1 migration from "other" \(q1\), back to p1\./);
+		assert.deepStrictEqual(
+			h.executor.requests.map((request) => [request.command, request.cwd]),
+			[
+				['down a2', path.join('/tmp/wt-other', 'backend')],
+				['pdown p1', path.join('/tmp/wt-other', 'backend')],
+				['migrate up', '/repo'],
+			],
+		);
+		assert.strictEqual(h.executor.requests[0].env.VENV, '/repo/.venv', '${workspaceFolder} is the real checkout');
+		assert.strictEqual(h.executor.requests[0].env.DATABASE_URL, MAIN_URL);
+		assert.deepStrictEqual(h.git.worktreeLog, ['add other', 'remove /tmp/wt-other'], 'one worktree, removed afterwards');
+		assert.match(h.ui.messages('info').pop() ?? '', /Reverted tenant to a2, public to p1 on app/);
+	});
+
+	test('works on the branch database when the branch has one', async () => {
+		const h = setup({ database: 'app_login' });
+		await h.store.link('feature/login', 'app_login');
+		await h.controller.start();
+		await h.controller.syncMigrations();
+		assert.ok(h.engine.calls.includes('query app_login: SELECT v FROM t'));
+		assert.match(h.executor.requests[0].env.DATABASE_URL, /\/app_login$/);
+	});
+
+	test('nothing to do when the database only has known migrations', async () => {
+		const h = setup({ applied: ['a2', 'p1'] });
+		await h.controller.start();
+		await h.controller.syncMigrations();
+		assert.match(h.ui.messages('info').pop() ?? '', /Nothing to revert/);
+		assert.deepStrictEqual(h.git.worktreeLog, []);
+		assert.strictEqual(h.executor.requests.length, 0);
+	});
+
+	test('only the stream that has foreign migrations is reverted', async () => {
+		const h = setup({ applied: ['o2', 'p1'] });
+		await h.controller.start();
+		await h.controller.syncMigrations();
+		assert.deepStrictEqual(h.executor.requests.map((request) => request.command), ['down a2', 'migrate up']);
+	});
+
+	test('cancelling the confirmation changes nothing', async () => {
+		const h = setup();
+		await h.controller.start();
+		h.ui.confirmAnswer = () => false;
+		await h.controller.syncMigrations();
+		assert.deepStrictEqual(h.git.worktreeLog, []);
+		assert.strictEqual(h.executor.requests.length, 0);
+	});
+
+	test('a failed revert stops, keeps the remaining streams and still removes the worktree', async () => {
+		const h = setup();
+		await h.controller.start();
+		h.executor.exitCode = (request) => (request.command.startsWith('down') ? 1 : 0);
+		await h.controller.syncMigrations();
+		assert.match(h.ui.messages('error')[0], /Reverting tenant on app failed/);
+		assert.deepStrictEqual(h.executor.requests.map((request) => request.command), ['down a2']);
+		assert.deepStrictEqual(h.git.worktreeLog, ['add other', 'remove /tmp/wt-other']);
+	});
+
+	test('a migration that is in no branch is reported', async () => {
+		const h = setup({ applied: ['zz', 'p1'] });
+		await h.controller.start();
+		await h.controller.syncMigrations();
+		assert.match(h.ui.messages('error')[0], /tenant: migration zz isn't in any branch/);
+		assert.deepStrictEqual(h.git.worktreeLog, []);
+	});
+
+	test('explains a missing configuration', async () => {
+		const h = setup({ withStreams: false });
+		await h.controller.start();
+		assert.strictEqual(h.controller.snapshot().hasMigrationStreams, false);
+		await h.controller.syncMigrations();
+		assert.match(h.ui.messages('error')[0], /migrations\.streams/);
+	});
+});
+
 suite('Controller: scripts and settings', () => {
 	test('runScript passes the full environment and placeholders', async () => {
 		const h = harness({
@@ -632,7 +766,10 @@ suite('Controller: scripts and settings', () => {
 		const h = harness();
 		await h.controller.setOnBranchChange('always');
 		h.controller.openSettings();
-		assert.deepStrictEqual(h.settings.updates, [['migrations.onBranchChange', 'always']]);
+		await h.controller.setImportDataOnCreate(false);
+		await h.controller.setServerRestartMode('ask');
+		assert.deepStrictEqual(h.settings.updates, [['migrations.onBranchChange', 'always'], ['database.importDataOnCreate', false], ['server.onDatabaseChange', 'ask']]);
+		assert.strictEqual(h.controller.snapshot().importDataOnCreate, true, 'reads the setting');
 		assert.strictEqual(h.settings.opened, 1);
 	});
 

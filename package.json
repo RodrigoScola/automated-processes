@@ -81,6 +81,12 @@
         "category": "Automated Processes"
       },
       {
+        "command": "automated-processes.syncMigrations",
+        "title": "Sync Migrations (Revert Other Branches' Migrations)",
+        "category": "Automated Processes",
+        "icon": "$(history)"
+      },
+      {
         "command": "automated-processes.runScript",
         "title": "Run Script",
         "category": "Automated Processes"
@@ -300,6 +306,27 @@
           "default": true,
           "order": 32,
           "markdownDescription": "Run migrations on the target after **Export Data** copies a database."
+        },
+        "automatedProcesses.migrations.streams": {
+          "type": "array",
+          "default": [],
+          "order": 33,
+          "markdownDescription": "Migration histories for **Sync Migrations**, which undoes migrations other branches applied to the current database (back to the last revision this branch knows) and then runs this branch's migrations. The undo runs with the other branch's code, in a temporary git worktree. List streams in the order they should be reverted. Placeholders: `${revision}`, `${worktree}`, `${workspaceFolder}`, plus the usual `${db.url}` etc. Default patterns read Alembic files.",
+          "items": {
+            "type": "object",
+            "required": ["versionQuery", "versionsPath", "downgradeCommand"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "Shown in messages, e.g. tenant." },
+              "versionQuery": { "type": "string", "description": "SQL returning the applied revision ids (one per row), e.g. SELECT version_num FROM alembic_version." },
+              "versionsPath": { "type": "string", "description": "Folder with the migration files, relative to the workspace folder." },
+              "downgradeCommand": { "type": "string", "description": "Reverts to ${revision}, e.g. alembic downgrade ${revision}." },
+              "cwd": { "type": "string", "description": "Working folder for the command, relative to the checkout root." },
+              "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra variables, e.g. to reuse the main checkout's virtualenv: ${workspaceFolder}/.venv." },
+              "revisionPattern": { "type": "string", "description": "Regex whose first group is a file's revision id. Default: Alembic's `revision = \"…\"`." },
+              "downRevisionPattern": { "type": "string", "description": "Regex whose first group holds the parent revision ids. Default: Alembic's `down_revision = …`." }
+            }
+          }
         },
         "automatedProcesses.server.command": {
           "type": "string",

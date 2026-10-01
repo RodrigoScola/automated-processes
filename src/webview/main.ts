@@ -41,6 +41,12 @@ function bindInputs(): void {
 	root.querySelectorAll<HTMLElement & { checked: boolean }>('vscode-checkbox[data-toggle="showHidden"]').forEach((checkbox) => {
 		checkbox.addEventListener('change', () => post({ type: 'setShowHidden', value: checkbox.checked }));
 	});
+	root.querySelectorAll<HTMLElement & { value: string }>('vscode-single-select[data-server-restart]').forEach((select) => {
+		select.addEventListener('change', () => post({ type: 'setServerRestartMode', value: select.value as 'restart' | 'ask' | 'off' }));
+	});
+	root.querySelectorAll<HTMLElement & { value: string }>('vscode-single-select[data-import-data]').forEach((select) => {
+		select.addEventListener('change', () => post({ type: 'setImportDataOnCreate', value: select.value === 'on' }));
+	});
 }
 
 root.addEventListener('click', (event) => {

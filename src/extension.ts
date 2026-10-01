@@ -107,6 +107,7 @@ function registerCommands(controller: Controller, executor: TaskExecutor): vscod
 		removeDatabase: (name?: unknown) => controller.removeDatabase(typeof name === 'string' ? name : undefined),
 		cleanUpDatabases: () => controller.cleanUpDatabases(),
 		runMigrations: () => controller.runMigrations(),
+		syncMigrations: () => controller.syncMigrations(),
 		runScript: async (id?: unknown) => {
 			const scriptId = typeof id === 'string' ? id : await pickScript(controller);
 			if (scriptId) {
@@ -162,6 +163,10 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			return controller.setShowHidden(message.value);
 		case 'setOnBranchChange':
 			return controller.setOnBranchChange(message.value);
+		case 'setImportDataOnCreate':
+			return controller.setImportDataOnCreate(message.value);
+		case 'setServerRestartMode':
+			return controller.setServerRestartMode(message.value);
 	}
 }
 

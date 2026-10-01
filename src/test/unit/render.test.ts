@@ -30,7 +30,9 @@ function state(overrides: Partial<ViewState> = {}): ViewState {
 		showHidden: false,
 		scripts: [{ id: 'ci', label: 'Check CI', icon: 'checklist', steps: ['Lint', 'Harness'], inputs: [{ name: 'suite', options: ['backend', 'all'], value: 'all' }] }],
 		hasMigrations: true,
+		hasMigrationStreams: false,
 		onBranchChange: 'ask',
+		importDataOnCreate: true,
 		server: { configured: false, running: false, debugSessions: [], onDatabaseChange: 'restart' },
 		canStartDatabase: true,
 		now: NOW,
@@ -134,6 +136,28 @@ suite('renderApp', () => {
 		assert.match(renderApp(state({ dbStatus: 'error', dbError: 'connection refused', databases: [] })), /connection refused/);
 		assert.match(renderApp(state({ dbStatus: 'loading', databases: [] })), /Loading databases/);
 		assert.match(renderApp(state({ hiddenCount: 3 })), /Show hidden \(3\)/);
+	});
+
+	test('the footer has the import-data toggle below the branch-change mode', () => {
+		const on = renderApp(state());
+		assert.match(on, /data-branch-mode[\s\S]*Import data on database creation<\/span>\s*<vscode-single-select class="branch-mode" data-import-data/);
+		assert.match(on, /<vscode-option value="on" selected>on/);
+		const off = renderApp(state({ importDataOnCreate: false }));
+		assert.match(off, /<vscode-option value="off" selected>off/);
+		assert.ok(!off.includes('<vscode-option value="on" selected>'));
+	});
+
+	test('Sync Migrations shows only when streams are configured', () => {
+		assert.ok(!renderApp(state()).includes('data-command="syncMigrations"'));
+		const html = renderApp(state({ hasMigrationStreams: true }));
+		assert.match(html, /data-command="runMigrations"[\s\S]*data-command="syncMigrations" title="Undo migrations other branches applied/);
+		assert.match(renderApp(state({ hasMigrationStreams: true, busy: 'x' })), /data-command="syncMigrations"[^>]* disabled/);
+	});
+
+	test('the footer has the server restart mode, same style as the others', () => {
+		const html = renderApp(state({ server: { configured: true, running: false, debugSessions: [], onDatabaseChange: 'ask' } }));
+		assert.match(html, /Import data on database creation[\s\S]*Restart server on database change<\/span>\s*<vscode-single-select class="branch-mode" data-server-restart/);
+		assert.match(html, /data-server-restart[\s\S]*<vscode-option value="ask" selected>ask/);
 	});
 
 	test('the Export Data button replaces "Migrate"', () => {

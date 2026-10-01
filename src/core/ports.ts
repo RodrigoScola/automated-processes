@@ -30,6 +30,15 @@ export interface GitPort {
 	localBranches(): Promise<Map<string, string>>;
 	/** Local branches whose tip is contained in `branch`. */
 	mergedInto(branch: string): Promise<Set<string>>;
+	/** File paths (relative to the repo root) under `dir`, in the working tree or at `ref`. */
+	listFiles(dir: string, ref?: string): Promise<string[]>;
+	/** A file's text, in the working tree or at `ref`. */
+	readFile(file: string, ref?: string): Promise<string>;
+	/** Branches (local first, then remote) whose history added `text` somewhere under `dir`. */
+	branchesContaining(text: string, dir: string): Promise<string[]>;
+	/** Checks `ref` out into a temporary folder and returns its path. */
+	addWorktree(ref: string): Promise<string>;
+	removeWorktree(path: string): Promise<void>;
 }
 
 /** Applies extra variables to new terminals and debug sessions. `undefined` clears them. */

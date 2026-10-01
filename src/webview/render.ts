@@ -159,9 +159,16 @@ function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
 function renderScriptsSection(state: ViewState, now: number): string {
 	const busy = Boolean(state.busy) || state.run?.status === 'running';
 	const scripts = state.scripts.map((script) => renderScript(script, busy)).join('');
-	const migrations = state.hasMigrations
-		? `<div class="script"><vscode-button icon="arrow-up" secondary data-command="runMigrations"${busy || !state.current ? ' disabled' : ''}>Run Migrations</vscode-button></div>`
-		: '';
+	const noRun = busy || !state.current ? ' disabled' : '';
+	const migrationButtons = [
+		state.hasMigrations
+			? `<vscode-button icon="arrow-up" secondary data-command="runMigrations" title="Apply this branch's migrations to the current database"${noRun}>Run Migrations</vscode-button>`
+			: '',
+		state.hasMigrationStreams
+			? `<vscode-button icon="history" secondary data-command="syncMigrations" title="Undo migrations other branches applied to the current database, back to the last one this branch knows, then run this branch's migrations"${noRun}>Sync Migrations</vscode-button>`
+			: '',
+	].join('');
+	const migrations = migrationButtons ? `<div class="script">${migrationButtons}</div>` : '';
 	const empty = !scripts && !migrations
 		? '<div class="hint">No scripts yet. Add them in <button class="link" data-command="openSettings">settings</button> (<code>automatedProcesses.scripts</code>).</div>'
 		: '';
@@ -257,10 +264,20 @@ function renderFooter(state: ViewState): string {
 		.map((value) => `<vscode-option value="${value}"${state.onBranchChange === value ? ' selected' : ''}>${value}</vscode-option>`)
 		.join('');
 	return `<footer class="footer">
-		<label class="footer-row"><span>Migrate on branch change</span>
-			<vscode-single-select class="branch-mode" data-branch-mode aria-label="Migrate on branch change"${state.hasMigrations ? '' : ' disabled'}>${options}</vscode-single-select>
+		<label class="footer-row"><span title="Runs the migrations command (schema changes) on the branch's database after you switch branches. Copies no data.">Run migrations on branch change</span>
+			<vscode-single-select class="branch-mode" data-branch-mode aria-label="Run migrations on branch change"${state.hasMigrations ? '' : ' disabled'}>${options}</vscode-single-select>
 		</label>
-		<button class="link footer-link" data-command="openSettings">${icon('settings-gear')} Settings</button>
+		<label class="footer-row"><span title="New Database copies the main database (schema and data) into the new one. Off: an empty database plus migrations.">Import data on database creation</span>
+			<vscode-single-select class="branch-mode" data-import-data aria-label="Import data on database creation">
+				<vscode-option value="on"${state.importDataOnCreate ? ' selected' : ''}>on</vscode-option>
+				<vscode-option value="off"${state.importDataOnCreate ? '' : ' selected'}>off</vscode-option>
+			</vscode-single-select>
+		</label>
+		<label class="footer-row"><span title="When the current database changes, restart the server started from here and running debug sessions so they use it.">Restart server on database change</span>
+			<vscode-single-select class="branch-mode" data-server-restart aria-label="Restart server on database change">
+				${(['restart', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.server.onDatabaseChange === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
+			</vscode-single-select>
+		</label>
 	</footer>`;
 }
 

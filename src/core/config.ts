@@ -1,5 +1,7 @@
 /** Typed view of the `automatedProcesses.*` settings. */
 
+import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from './migrationSync';
+
 export type BranchChangeMode = 'off' | 'ask' | 'always';
 export type MergedBranchMode = 'delete' | 'keep';
 export type ServerRestartMode = 'restart' | 'ask' | 'off';
@@ -20,6 +22,22 @@ export interface ScriptDefinition {
 	env: Record<string, string>;
 	inputs: Record<string, ScriptInput>;
 	steps: ScriptStep[];
+}
+
+/** One migration history (e.g. an Alembic stream), used by Sync Migrations. */
+export interface MigrationStream {
+	name: string;
+	/** SQL returning the applied revision ids, one per row, run against the current database. */
+	versionQuery: string;
+	/** Folder with the migration files, relative to the workspace folder. */
+	versionsPath: string;
+	/** Reverts to `${revision}`. Runs in a temporary checkout of the branch the migrations came from. */
+	downgradeCommand: string;
+	/** Working folder for the command, relative to the checkout root. */
+	cwd: string;
+	env: Record<string, string>;
+	revisionPattern: string;
+	downRevisionPattern: string;
 }
 
 export interface Config {
@@ -47,6 +65,7 @@ export interface Config {
 		command: string;
 		onBranchChange: BranchChangeMode;
 		afterCopy: boolean;
+		streams: MigrationStream[];
 	};
 	server: {
 		/** Command that runs the app's server in a terminal the extension owns. */
@@ -81,6 +100,7 @@ export const DEFAULT_CONFIG: Config = {
 		command: '',
 		onBranchChange: 'ask',
 		afterCopy: true,
+		streams: [],
 	},
 	server: {
 		command: '',
@@ -125,6 +145,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 			command: str(read('migrations.command'), d.migrations.command, true),
 			onBranchChange: oneOf(read('migrations.onBranchChange'), ['off', 'ask', 'always'], d.migrations.onBranchChange),
 			afterCopy: bool(read('migrations.afterCopy'), d.migrations.afterCopy),
+			streams: readStreams(read('migrations.streams'), problems),
 		},
 		server: {
 			command: str(read('server.command'), d.server.command, true),
@@ -133,6 +154,41 @@ export function readConfig(read: SettingReader): ConfigResult {
 		scripts: readScripts(read('scripts'), problems),
 	};
 	return { config, problems };
+}
+
+function readStreams(raw: unknown, problems: string[]): MigrationStream[] {
+	if (raw === undefined || raw === null) {
+		return [];
+	}
+	if (!Array.isArray(raw)) {
+		problems.push('migrations.streams must be a list.');
+		return [];
+	}
+	const streams: MigrationStream[] = [];
+	raw.forEach((item, index) => {
+		const where = `migrations.streams[${index}]`;
+		if (!isObject(item)) {
+			problems.push(`${where} must be an object.`);
+			return;
+		}
+		const missing = ['versionQuery', 'versionsPath', 'downgradeCommand']
+			.filter((key) => typeof item[key] !== 'string' || !(item[key] as string).trim());
+		if (missing.length > 0) {
+			problems.push(`${where} needs ${missing.map((key) => `"${key}"`).join(', ')}.`);
+			return;
+		}
+		streams.push({
+			name: str(item.name, `stream ${index + 1}`),
+			versionQuery: (item.versionQuery as string).trim(),
+			versionsPath: (item.versionsPath as string).trim(),
+			downgradeCommand: (item.downgradeCommand as string).trim(),
+			cwd: str(item.cwd, '.', true) || '.',
+			env: stringMap(item.env, `${where}.env`, problems),
+			revisionPattern: str(item.revisionPattern, DEFAULT_REVISION_PATTERN),
+			downRevisionPattern: str(item.downRevisionPattern, DEFAULT_DOWN_REVISION_PATTERN),
+		});
+	});
+	return streams;
 }
 
 function readScripts(raw: unknown, problems: string[]): ScriptDefinition[] {

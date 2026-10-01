@@ -76,6 +76,39 @@ export class FakeGit implements GitPort {
 	async mergedInto() {
 		return new Set(this.merged);
 	}
+
+	/** Files per ref; the key '' is the working tree. */
+	readonly trees = new Map<string, Map<string, string>>([['', new Map()]]);
+	/** Text → branches whose history added it. */
+	readonly origins = new Map<string, string[]>();
+	readonly worktreeLog: string[] = [];
+
+	setFile(ref: string, file: string, text: string) {
+		if (!this.trees.has(ref)) {
+			this.trees.set(ref, new Map());
+		}
+		this.trees.get(ref)!.set(file, text);
+	}
+	async listFiles(dir: string, ref = '') {
+		return [...(this.trees.get(ref)?.keys() ?? [])].filter((file) => file.startsWith(`${dir}/`));
+	}
+	async readFile(file: string, ref = '') {
+		const text = this.trees.get(ref)?.get(file);
+		if (text === undefined) {
+			throw new Error(`no ${file} at ${ref || 'working tree'}`);
+		}
+		return text;
+	}
+	async branchesContaining(text: string) {
+		return this.origins.get(text) ?? [];
+	}
+	async addWorktree(ref: string) {
+		this.worktreeLog.push(`add ${ref}`);
+		return `/tmp/wt-${ref}`;
+	}
+	async removeWorktree(folder: string) {
+		this.worktreeLog.push(`remove ${folder}`);
+	}
 }
 
 export class FakeEngine implements DatabaseEngine {
@@ -83,11 +116,18 @@ export class FakeEngine implements DatabaseEngine {
 	readonly settings = new Map<string, string[]>();
 	readonly sessions = new Map<string, DatabaseConnection[]>();
 	readonly calls: string[] = [];
+	/** `${database}|${sql}` → rows. */
+	readonly results = new Map<string, string[][]>();
 	failListing: Error | undefined;
 	failDumpRestore: Error | undefined;
 
 	constructor(...names: string[]) {
 		names.forEach((name) => this.databases.add(name));
+	}
+
+	async query(sql: string, database = 'postgres') {
+		this.calls.push(`query ${database}: ${sql}`);
+		return this.results.get(`${database}|${sql}`) ?? [];
 	}
 
 	async listDatabases() {

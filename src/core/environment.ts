@@ -85,6 +85,7 @@ export function placeholderContext(
 	isMain: boolean,
 	branch: string | undefined,
 	inputs: Record<string, string> = {},
+	extra: Record<string, string> = {},
 ): PlaceholderContext {
 	const main = mainDatabase(config, env);
 	const test = testDatabaseFor(config, env, database, isMain);
@@ -94,6 +95,7 @@ export function placeholderContext(
 		env: { ...processEnv, ...env.main },
 		inputs,
 		branch,
+		extra,
 	};
 }
 
@@ -106,6 +108,8 @@ export interface CommandEnvOptions {
 	branch: string | undefined;
 	scriptEnv?: Record<string, string>;
 	inputs?: Record<string, string>;
+	/** Extra placeholders, e.g. `worktree`, `revision`. */
+	extra?: Record<string, string>;
 }
 
 /**
@@ -114,7 +118,7 @@ export interface CommandEnvOptions {
  */
 export function buildCommandEnv(options: CommandEnvOptions): EnvMap {
 	const { config, env } = options;
-	const context = placeholderContext(config, env, options.processEnv, options.database, options.isMain, options.branch, options.inputs);
+	const context = placeholderContext(config, env, options.processEnv, options.database, options.isMain, options.branch, options.inputs, options.extra);
 	const result: EnvMap = {};
 	for (const [key, value] of Object.entries(options.processEnv)) {
 		if (value !== undefined) {
@@ -133,7 +137,7 @@ export function buildCommandEnv(options: CommandEnvOptions): EnvMap {
 /**
  * Only what the extension adds on top of the user's environment, for terminals and debug sessions.
  */
-export function buildEnvAdditions(options: Omit<CommandEnvOptions, 'scriptEnv' | 'inputs'>): EnvMap {
+export function buildEnvAdditions(options: Omit<CommandEnvOptions, 'scriptEnv' | 'inputs' | 'extra'>): EnvMap {
 	const { config, env } = options;
 	const context = placeholderContext(config, env, options.processEnv, options.database, options.isMain, options.branch);
 	return {

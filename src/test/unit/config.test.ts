@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { DEFAULT_CONFIG, readConfig } from '../../core/config';
+import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from '../../core/migrationSync';
 
 function read(settings: Record<string, unknown>) {
 	return readConfig((key) => settings[key]);
@@ -124,6 +125,26 @@ suite('config', () => {
 		assert.ok(problems.some((problem) => problem.includes('duplicate id "Good"')));
 		assert.ok(problems.some((problem) => problem.includes('needs "run" or "copyFile"')));
 		assert.ok(problems.some((problem) => problem.includes('non-empty "options"')));
+	});
+
+	test('reads migration streams with Alembic defaults and reports incomplete ones', () => {
+		const { config, problems } = read({
+			'migrations.streams': [
+				{ name: 'tenant', versionQuery: 'SELECT 1', versionsPath: 'm', downgradeCommand: 'down ${revision}', cwd: 'backend', env: { A: 'b' } },
+				{ versionQuery: 'SELECT 2', versionsPath: 'p', downgradeCommand: 'x', revisionPattern: 'id: (\\w+)' },
+				{ name: 'broken', versionQuery: 'SELECT 3' },
+			],
+		});
+		assert.strictEqual(config.migrations.streams.length, 2);
+		assert.deepStrictEqual(config.migrations.streams[0], {
+			name: 'tenant', versionQuery: 'SELECT 1', versionsPath: 'm', downgradeCommand: 'down ${revision}', cwd: 'backend', env: { A: 'b' },
+			revisionPattern: DEFAULT_REVISION_PATTERN, downRevisionPattern: DEFAULT_DOWN_REVISION_PATTERN,
+		});
+		assert.strictEqual(config.migrations.streams[1].name, 'stream 2');
+		assert.strictEqual(config.migrations.streams[1].cwd, '.');
+		assert.strictEqual(config.migrations.streams[1].revisionPattern, 'id: (\\w+)');
+		assert.deepStrictEqual(problems, ['migrations.streams[2] needs "versionsPath", "downgradeCommand".']);
+		assert.deepStrictEqual(read({ 'migrations.streams': 'x' }).problems, ['migrations.streams must be a list.']);
 	});
 
 	test('rejects a non-list scripts value and non-string env values', () => {

@@ -1,5 +1,7 @@
+import * as path from 'path';
 import { CurrentDatabase, databasesFreeAfterUnlink, findFinishedLinks, isMainBranch, resolveCurrent } from './branches';
-import { BranchChangeMode, Config, ConfigResult, ScriptDefinition } from './config';
+import { BranchChangeMode, Config, ConfigResult, MigrationStream, ScriptDefinition, ServerRestartMode } from './config';
+import { buildGraph, MigrationGraph, planRevert } from './migrationSync';
 import { parseDbUrl } from './dbUrl';
 import { EnvMap } from './envFile';
 import {
@@ -192,7 +194,10 @@ export class Controller {
 			branches: linkedBranches.get(name) ?? [],
 			hidden: name !== mainName && name !== current?.database && matchesAnyGlob(name, config.database.hidePatterns),
 		}));
-		all.sort((a, b) => Number(b.isMain) - Number(a.isMain) || a.name.localeCompare(b.name));
+		// Main first, then the current one, then the rest by name.
+		all.sort((a, b) => Number(b.isMain) - Number(a.isMain)
+			|| Number(b.isCurrent) - Number(a.isCurrent)
+			|| a.name.localeCompare(b.name));
 
 		let testName: string | undefined;
 		if (current && root) {
@@ -241,8 +246,10 @@ export class Controller {
 				}),
 			})),
 			hasMigrations: config.migrations.command !== '',
+			hasMigrationStreams: config.migrations.streams.length > 0,
 			run: this.deps.scripts.lastRun,
 			onBranchChange: config.migrations.onBranchChange,
+			importDataOnCreate: config.database.importDataOnCreate,
 			server: {
 				configured: config.server.command !== '',
 				running: this.deps.server.isServerRunning(),
@@ -594,6 +601,118 @@ export class Controller {
 		});
 	}
 
+	/**
+	 * Reverts migrations that other branches applied to the current database, back to the last
+	 * revision this branch knows, then runs this branch's migrations. The revert runs with the
+	 * other branch's code, in a temporary git worktree, because only it can undo its migrations.
+	 */
+	async syncMigrations(): Promise<void> {
+		await this.guard('Syncing migrations', async () => {
+			const ready = this.ready();
+			const streams = ready.config.migrations.streams;
+			if (streams.length === 0) {
+				throw new UserError('No migration streams configured. Set automatedProcesses.migrations.streams to use Sync Migrations.');
+			}
+			const database = this.current?.database ?? ready.main.name;
+			const isMain = database === ready.main.name;
+
+			const reverts: { stream: MigrationStream; ref: string; foreign: string[]; target: string }[] = [];
+			for (const stream of streams) {
+				const patterns = { revision: stream.revisionPattern, downRevision: stream.downRevisionPattern };
+				const applied = (await ready.engine.query(stream.versionQuery, database)).map((row) => row[0]).filter(Boolean);
+				const known = new Set((await this.readGraph(stream.versionsPath, patterns)).keys());
+				const foreignHeads = applied.filter((revision) => !known.has(revision));
+				if (foreignHeads.length === 0) {
+					continue;
+				}
+				const ref = (await this.deps.git.branchesContaining(foreignHeads[0], stream.versionsPath))
+					.find((candidate) => candidate !== ready.branch);
+				if (!ref) {
+					throw new UserError(`${stream.name}: migration ${foreignHeads[0]} isn't in any branch, so it can't be reverted automatically.`);
+				}
+				const plan = planRevert(applied, known, await this.readGraph(stream.versionsPath, patterns, ref));
+				if (plan.status === 'error') {
+					throw new UserError(`${stream.name}: ${plan.message}`);
+				}
+				if (plan.status === 'revert') {
+					reverts.push({ stream, ref, foreign: plan.foreign, target: plan.target });
+				}
+			}
+
+			if (reverts.length === 0) {
+				void this.deps.ui.info(`${database} only has migrations this branch knows. Nothing to revert.`);
+				return;
+			}
+			const ok = await this.deps.ui.confirm(
+				`Revert migrations from other branches on ${database}?`,
+				[
+					...reverts.map((item) => `${item.stream.name}: undo ${item.foreign.length} migration${item.foreign.length === 1 ? '' : 's'} from "${item.ref}" (${item.foreign.join(', ')}), back to ${item.target}.`),
+					'',
+					`Tables and data those migrations created are removed.${ready.config.migrations.command ? ' Then this branch\'s migrations run.' : ''}`,
+				].join('\n'),
+				'Revert',
+			);
+			if (!ok) {
+				return;
+			}
+
+			const worktrees = new Map<string, string>();
+			try {
+				for (const item of reverts) {
+					let worktree = worktrees.get(item.ref);
+					if (!worktree) {
+						worktree = await this.deps.git.addWorktree(item.ref);
+						worktrees.set(item.ref, worktree);
+					}
+					const extra = { revision: item.target, worktree, workspaceFolder: ready.root };
+					const env = buildCommandEnv({
+						processEnv: this.deps.processEnv,
+						config: ready.config,
+						env: ready.env,
+						database,
+						isMain,
+						branch: ready.branch,
+						scriptEnv: item.stream.env,
+						extra,
+					});
+					const state = await this.deps.scripts.run(
+						{
+							id: '__sync',
+							label: 'Sync Migrations',
+							icon: 'history',
+							env: {},
+							inputs: {},
+							steps: [{ label: `Revert ${item.stream.name} to ${item.target}`, run: item.stream.downgradeCommand }],
+						},
+						{
+							env,
+							cwd: path.join(worktree, item.stream.cwd),
+							context: placeholderContext(ready.config, ready.env, this.deps.processEnv, database, isMain, ready.branch, {}, extra),
+						},
+					);
+					if (state.status !== 'passed') {
+						throw new UserError(`Reverting ${item.stream.name} on ${database} failed; see the terminal. Earlier streams may already be reverted.`);
+					}
+				}
+			} finally {
+				for (const worktree of worktrees.values()) {
+					await this.deps.git.removeWorktree(worktree).catch(() => undefined);
+				}
+			}
+
+			if (ready.config.migrations.command) {
+				await this.runMigrationsOn(database, false, true);
+			}
+			void this.deps.ui.info(`Reverted ${reverts.map((item) => `${item.stream.name} to ${item.target}`).join(', ')} on ${database}.`);
+		});
+	}
+
+	private async readGraph(dir: string, patterns: { revision: string; downRevision: string }, ref?: string): Promise<MigrationGraph> {
+		const files = await this.deps.git.listFiles(dir, ref);
+		const texts = await Promise.all(files.map((file) => this.deps.git.readFile(file, ref)));
+		return buildGraph(texts, patterns);
+	}
+
 	async runScript(scriptId: string, step?: number): Promise<RunState | undefined> {
 		const { config } = this.deps.readConfig();
 		const script = config.scripts.find((item) => item.id === scriptId);
@@ -721,6 +840,14 @@ export class Controller {
 
 	async setOnBranchChange(value: BranchChangeMode): Promise<void> {
 		await this.deps.settings.update('migrations.onBranchChange', value);
+	}
+
+	async setServerRestartMode(value: ServerRestartMode): Promise<void> {
+		await this.deps.settings.update('server.onDatabaseChange', value);
+	}
+
+	async setImportDataOnCreate(value: boolean): Promise<void> {
+		await this.deps.settings.update('database.importDataOnCreate', value);
 	}
 
 	openSettings(): void {

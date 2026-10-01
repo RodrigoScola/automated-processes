@@ -69,8 +69,12 @@ export interface ViewState {
 	busy?: string;
 	scripts: ViewScript[];
 	hasMigrations: boolean;
+	/** Sync Migrations is configured (`migrations.streams`). */
+	hasMigrationStreams: boolean;
 	run?: ViewRun;
 	onBranchChange: BranchChangeMode;
+	/** New Database copies the main database's data into the new one. */
+	importDataOnCreate: boolean;
 	server: {
 		/** A server command is configured. */
 		configured: boolean;
@@ -91,6 +95,7 @@ export type CommandName =
 	| 'removeDatabase'
 	| 'cleanUpDatabases'
 	| 'runMigrations'
+	| 'syncMigrations'
 	| 'startDatabase'
 	| 'startServer'
 	| 'stopServer'
@@ -108,6 +113,8 @@ export type WebviewMessage =
 	| { type: 'runScript'; scriptId: string; step?: number }
 	| { type: 'setInput'; scriptId: string; name: string; value: string }
 	| { type: 'setShowHidden'; value: boolean }
-	| { type: 'setOnBranchChange'; value: BranchChangeMode };
+	| { type: 'setOnBranchChange'; value: BranchChangeMode }
+	| { type: 'setImportDataOnCreate'; value: boolean }
+	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' };
 
 export type ExtensionMessage = { type: 'state'; state: ViewState };

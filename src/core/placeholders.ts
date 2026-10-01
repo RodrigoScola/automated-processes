@@ -4,6 +4,8 @@ export interface PlaceholderContext {
 	env: Record<string, string | undefined>;
 	inputs: Record<string, string>;
 	branch?: string;
+	/** Other names, e.g. `revision`, `worktree`, `workspaceFolder`. */
+	extra?: Record<string, string>;
 }
 
 /**
@@ -33,7 +35,7 @@ function lookup(key: string, context: PlaceholderContext): string | undefined {
 		case 'testDb.name': return context.testDb?.name;
 		case 'testDb.url': return context.testDb?.url;
 		case 'branch': return context.branch;
-		default: return undefined;
+		default: return context.extra?.[key];
 	}
 }
 
