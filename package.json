@@ -2,7 +2,7 @@
   "name": "automated-processes",
   "displayName": "Automated Processes",
   "description": "Per-branch PostgreSQL databases and one-click project scripts.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "rodrigoscola",
   "license": "MIT",
   "repository": {
@@ -326,17 +326,48 @@
           "markdownDescription": "Migration histories for **Sync Migrations**, which undoes migrations other branches applied to the current database (back to the last revision this branch knows) and then runs this branch's migrations. The undo runs with the other branch's code, in a temporary git worktree. List streams in the order they should be reverted. Placeholders: `${revision}`, `${worktree}`, `${workspaceFolder}`, plus the usual `${db.url}` etc. Default patterns read Alembic files.",
           "items": {
             "type": "object",
-            "required": ["versionQuery", "versionsPath", "downgradeCommand"],
+            "required": [
+              "versionQuery",
+              "versionsPath",
+              "downgradeCommand"
+            ],
             "additionalProperties": false,
             "properties": {
-              "name": { "type": "string", "description": "Shown in messages, e.g. tenant." },
-              "versionQuery": { "type": "string", "description": "SQL returning the applied revision ids (one per row), e.g. SELECT version_num FROM alembic_version." },
-              "versionsPath": { "type": "string", "description": "Folder with the migration files, relative to the workspace folder." },
-              "downgradeCommand": { "type": "string", "description": "Reverts to ${revision}, e.g. alembic downgrade ${revision}." },
-              "cwd": { "type": "string", "description": "Working folder for the command, relative to the checkout root." },
-              "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra variables, e.g. to reuse the main checkout's virtualenv: ${workspaceFolder}/.venv." },
-              "revisionPattern": { "type": "string", "description": "Regex whose first group is a file's revision id. Default: Alembic's `revision = \"…\"`." },
-              "downRevisionPattern": { "type": "string", "description": "Regex whose first group holds the parent revision ids. Default: Alembic's `down_revision = …`." }
+              "name": {
+                "type": "string",
+                "description": "Shown in messages, e.g. tenant."
+              },
+              "versionQuery": {
+                "type": "string",
+                "description": "SQL returning the applied revision ids (one per row), e.g. SELECT version_num FROM alembic_version."
+              },
+              "versionsPath": {
+                "type": "string",
+                "description": "Folder with the migration files, relative to the workspace folder."
+              },
+              "downgradeCommand": {
+                "type": "string",
+                "description": "Reverts to ${revision}, e.g. alembic downgrade ${revision}."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working folder for the command, relative to the checkout root."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Extra variables, e.g. to reuse the main checkout's virtualenv: ${workspaceFolder}/.venv."
+              },
+              "revisionPattern": {
+                "type": "string",
+                "description": "Regex whose first group is a file's revision id. Default: Alembic's `revision = \"…\"`."
+              },
+              "downRevisionPattern": {
+                "type": "string",
+                "description": "Regex whose first group holds the parent revision ids. Default: Alembic's `down_revision = …`."
+              }
             }
           }
         },
@@ -347,14 +378,32 @@
           "markdownDescription": "Servers shown in the sidebar, each with run, debug, restart and stop buttons. They run with the current database, and those with `restartOnDatabaseChange` restart when it changes (see `#automatedProcesses.server.onDatabaseChange#`).",
           "items": {
             "type": "object",
-            "required": ["label"],
+            "required": [
+              "label"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "description": "Stable id (defaults to the label)." },
-              "label": { "type": "string", "description": "Shown in the sidebar, e.g. Backend." },
-              "command": { "type": "string", "description": "Runs the server in its own terminal, e.g. npm run dev." },
-              "debugConfiguration": { "type": "string", "description": "Name of the launch.json configuration the debug button starts." },
-              "restartOnDatabaseChange": { "type": "boolean", "default": true, "description": "Restart it when the current database changes. Turn off for servers that don't use the database, like a frontend." }
+              "id": {
+                "type": "string",
+                "description": "Stable id (defaults to the label)."
+              },
+              "label": {
+                "type": "string",
+                "description": "Shown in the sidebar, e.g. Backend."
+              },
+              "command": {
+                "type": "string",
+                "description": "Runs the server in its own terminal, e.g. npm run dev."
+              },
+              "debugConfiguration": {
+                "type": "string",
+                "description": "Name of the launch.json configuration the debug button starts."
+              },
+              "restartOnDatabaseChange": {
+                "type": "boolean",
+                "default": true,
+                "description": "Restart it when the current database changes. Turn off for servers that don't use the database, like a frontend."
+              }
             }
           }
         },
@@ -366,14 +415,20 @@
         },
         "automatedProcesses.onGitUpdate.mode": {
           "type": "string",
-          "enum": ["always", "ask", "off"],
+          "enum": [
+            "always",
+            "ask",
+            "off"
+          ],
           "default": "always",
           "order": 38,
           "markdownDescription": "Run the `#automatedProcesses.onGitUpdate.script#` script automatically, ask first, or not at all."
         },
         "automatedProcesses.onGitUpdate.whenFilesChange": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "order": 39,
           "markdownDescription": "Only run it when one of these files changed in the update (globs relative to the repository root, `*` matches anything), e.g. `uv.lock`, `package-lock.json`. Empty = on every update."
