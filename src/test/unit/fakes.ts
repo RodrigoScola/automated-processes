@@ -70,6 +70,16 @@ export class FakeGit implements GitPort {
 	currentBranch() {
 		return this.branch;
 	}
+
+	commit: string | undefined = 'c-login';
+	/** `${from}..${to}` → changed files. */
+	readonly diffs = new Map<string, string[]>();
+	currentCommit() {
+		return this.commit;
+	}
+	async changedFiles(from: string, to: string) {
+		return this.diffs.get(`${from}..${to}`) ?? [];
+	}
 	async localBranches() {
 		return new Map(this.branches);
 	}
@@ -215,29 +225,47 @@ export class FakeEnvSink implements EnvironmentSink {
 }
 
 export class FakeServer implements ServerControl {
-	running = false;
+	readonly running = new Set<string>();
 	sessions: string[] = [];
+	launch: string[] = [];
 	readonly events: string[] = [];
 	lastEnv: EnvMap | undefined;
+	debugStarts = true;
 
-	isServerRunning() {
-		return this.running;
+	runningServers() {
+		return [...this.running];
+	}
+	async startServer(id: string, _label: string, command: string, env: EnvMap) {
+		this.events.push(`${this.running.has(id) ? 'restart' : 'start'} ${id}: ${command} @ ${env.DATABASE_URL?.split('/').pop()}`);
+		this.running.add(id);
+		this.lastEnv = env;
+	}
+	stopServer(id: string) {
+		if (this.running.delete(id)) {
+			this.events.push(`stop ${id}`);
+		}
 	}
 	runningDebugSessions() {
 		return [...this.sessions];
 	}
-	async startServer(command: string, env: EnvMap) {
-		this.events.push(`${this.running ? 'restart' : 'start'} ${command} @ ${env.DATABASE_URL?.split('/').pop()}`);
-		this.running = true;
-		this.lastEnv = env;
+	async restartDebugSessions(skip: string[]) {
+		const restarted = this.sessions.filter((name) => !skip.includes(name));
+		restarted.forEach((name) => this.events.push(`restart debug ${name}`));
+		return restarted;
 	}
-	stopServer() {
-		this.events.push('stop');
-		this.running = false;
+	launchConfigurations() {
+		return [...this.launch];
 	}
-	async restartDebugSessions() {
-		this.sessions.forEach((name) => this.events.push(`debug ${name}`));
-		return [...this.sessions];
+	async startDebugging(name: string) {
+		this.events.push(`debug ${name}`);
+		if (this.debugStarts) {
+			this.sessions.push(name);
+		}
+		return this.debugStarts;
+	}
+	async stopDebugging(name: string) {
+		this.events.push(`stop debug ${name}`);
+		this.sessions = this.sessions.filter((item) => item !== name);
 	}
 }
 

@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { ViewState } from '../../shared/protocol';
+import { ViewServer, ViewState } from '../../shared/protocol';
 import { duration, escapeHtml, relativeTime, renderApp } from '../../webview/render';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -33,7 +33,9 @@ function state(overrides: Partial<ViewState> = {}): ViewState {
 		hasMigrationStreams: false,
 		onBranchChange: 'ask',
 		importDataOnCreate: true,
-		server: { configured: false, running: false, debugSessions: [], onDatabaseChange: 'restart' },
+		servers: [],
+		otherDebugSessions: [],
+		serverRestartMode: 'restart',
 		canStartDatabase: true,
 		now: NOW,
 		...overrides,
@@ -155,9 +157,16 @@ suite('renderApp', () => {
 	});
 
 	test('the footer has the server restart mode, same style as the others', () => {
-		const html = renderApp(state({ server: { configured: true, running: false, debugSessions: [], onDatabaseChange: 'ask' } }));
+		const html = renderApp(state({ serverRestartMode: 'ask' }));
 		assert.match(html, /Import data on database creation[\s\S]*Restart server on database change<\/span>\s*<vscode-single-select class="branch-mode" data-server-restart/);
 		assert.match(html, /data-server-restart[\s\S]*<vscode-option value="ask" selected>ask/);
+	});
+
+	test('the footer shows the git-update mode only when a script is configured', () => {
+		assert.ok(!renderApp(state()).includes('data-git-update'));
+		const html = renderApp(state({ gitUpdate: { label: 'Update Dependencies', mode: 'ask' } }));
+		assert.match(html, /Restart server on database change[\s\S]*Update Dependencies automatically<\/span>\s*<vscode-single-select class="branch-mode" data-git-update/);
+		assert.match(html, /data-git-update[\s\S]*<vscode-option value="ask" selected>ask/);
 	});
 
 	test('the Export Data button replaces "Migrate"', () => {
@@ -166,20 +175,48 @@ suite('renderApp', () => {
 		assert.ok(!/>Migrate</.test(html));
 	});
 
-	test('server row: hidden when unused, start when stopped, restart/stop when running', () => {
+	const server = (overrides: Partial<ViewServer> = {}): ViewServer => ({
+		id: 'backend', label: 'Backend', status: 'stopped', canRun: true, canDebug: true,
+		debugConfiguration: 'Backend: FastAPI', restartOnDatabaseChange: true, ...overrides,
+	});
+
+	test('no server rows when none are configured or debugging', () => {
 		assert.ok(!renderApp(state()).includes('class="server'));
-		const stopped = renderApp(state({ server: { configured: true, running: false, debugSessions: [], onDatabaseChange: 'restart' } }));
-		assert.match(stopped, /server stopped/);
-		assert.match(stopped, /data-command="startServer"/);
-		assert.ok(!stopped.includes('data-command="restartServer"'));
-		const running = renderApp(state({ server: { configured: true, running: true, debugSessions: ['Backend: FastAPI'], onDatabaseChange: 'ask' } }));
-		assert.match(running, /server running · debugging Backend: FastAPI/);
-		assert.match(running, /asks to restart on database change/);
-		assert.match(running, /data-command="restartServer"/);
-		assert.match(running, /data-command="stopServer"/);
-		const debugOnly = renderApp(state({ server: { configured: false, running: false, debugSessions: ['Backend'], onDatabaseChange: 'restart' } }));
-		assert.match(debugOnly, /data-command="restartServer"/);
-		assert.ok(!debugOnly.includes('data-command="startServer"'));
+	});
+
+	test('a stopped server has run and debug buttons', () => {
+		const html = renderApp(state({ servers: [server()] }));
+		assert.match(html, /Backend · stopped/);
+		assert.match(html, /data-command="startServer" data-server="backend"/);
+		assert.match(html, /title="Debug Backend \(Backend: FastAPI\)"[^>]*data-command="debugServer" data-server="backend"/);
+		assert.ok(!html.includes('data-command="restartServer"'));
+		assert.ok(!html.includes('data-command="stopServer"'));
+	});
+
+	test('running and debugging servers show restart and stop, and the other start mode', () => {
+		const html = renderApp(state({ serverRestartMode: 'ask', servers: [
+			server({ status: 'running' }),
+			server({ id: 'frontend', label: 'Frontend', status: 'debugging', restartOnDatabaseChange: false }),
+		] }));
+		assert.match(html, /Backend · running[\s\S]*asks to restart on database change/);
+		assert.ok(!/data-command="startServer" data-server="backend"/.test(html), 'already running');
+		assert.match(html, /data-command="debugServer" data-server="backend"/);
+		assert.match(html, /Frontend · debugging[\s\S]*not restarted on database change/);
+		assert.match(html, /data-command="startServer" data-server="frontend"/);
+		assert.ok(!/data-command="debugServer" data-server="frontend"/.test(html), 'already debugging');
+		assert.match(html, /data-command="restartServer" data-server="frontend"/);
+		assert.match(html, /data-command="stopServer" data-server="frontend"/);
+		assert.match(html, /server is-running is-debugging/);
+	});
+
+	test('buttons follow what each server supports, and unrelated debug sessions get a row', () => {
+		const html = renderApp(state({
+			servers: [server({ canDebug: false }), server({ id: 'dbg', label: 'Debug only', canRun: false })],
+			otherDebugSessions: ['Attach to Node'],
+		}));
+		assert.ok(!/data-command="debugServer" data-server="backend"/.test(html));
+		assert.ok(!/data-command="startServer" data-server="dbg"/.test(html));
+		assert.match(html, /debugging Attach to Node[\s\S]*data-command="restartServer"/);
 	});
 
 	test('warns visually when a feature branch uses main', () => {

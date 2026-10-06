@@ -115,9 +115,12 @@ function registerCommands(controller: Controller, executor: TaskExecutor): vscod
 			}
 		},
 		startDatabase: () => controller.startDatabase(),
-		startServer: () => controller.startServer(),
-		stopServer: () => controller.stopServer(),
-		restartServer: () => controller.restartServer(),
+		connectDatabase: () => controller.connectDatabase(),
+		startServer: async (id?: unknown) => withServer(controller, id, 'Run which server?', (server) => controller.startServer(server)),
+		debugServer: async (id?: unknown) => withServer(controller, id, 'Debug which server?', (server) => controller.debugServer(server)),
+		stopServer: async (id?: unknown) => withServer(controller, id, 'Stop which server?', (server) => controller.stopServer(server)),
+		// Without an id (palette, status row of other sessions) it restarts everything that runs.
+		restartServer: (id?: unknown) => controller.restartServer(typeof id === 'string' ? id : undefined),
 		refresh: () => controller.refresh(),
 		openSettings: () => controller.openSettings(),
 		cancelRun: () => controller.cancelRun(),
@@ -126,6 +129,24 @@ function registerCommands(controller: Controller, executor: TaskExecutor): vscod
 	return Object.entries(commands).map(([name, handler]) =>
 		vscode.commands.registerCommand(`${COMMAND_PREFIX}.${name}`, handler),
 	);
+}
+
+/** Uses `id` when given, otherwise the only server, otherwise asks. */
+async function withServer(controller: Controller, id: unknown, title: string, action: (server: string) => Promise<void>): Promise<void> {
+	if (typeof id === 'string') {
+		return action(id);
+	}
+	const servers = controller.snapshot().servers;
+	if (servers.length === 0) {
+		void vscode.window.showInformationMessage('No servers configured. Add them to automatedProcesses.servers.');
+		return;
+	}
+	const picked = servers.length === 1
+		? servers[0]
+		: (await vscode.window.showQuickPick(servers.map((server) => ({ label: server.label, description: server.status, server })), { title }))?.server;
+	if (picked) {
+		await action(picked.id);
+	}
 }
 
 async function pickScript(controller: Controller): Promise<string | undefined> {
@@ -147,7 +168,7 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			if (message.command === 'showOutput') {
 				executor.showOutput();
 			} else {
-				await vscode.commands.executeCommand(`${COMMAND_PREFIX}.${message.command}`, message.database);
+				await vscode.commands.executeCommand(`${COMMAND_PREFIX}.${message.command}`, message.database ?? message.server);
 			}
 			return;
 		case 'migrateFrom':
@@ -167,6 +188,8 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			return controller.setImportDataOnCreate(message.value);
 		case 'setServerRestartMode':
 			return controller.setServerRestartMode(message.value);
+		case 'setGitUpdateMode':
+			return controller.setGitUpdateMode(message.value);
 	}
 }
 

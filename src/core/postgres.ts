@@ -218,6 +218,17 @@ export function isToolMissing(error: unknown): boolean {
 	return error instanceof Error && /was not found/.test(error.message);
 }
 
+/** True when the docker CLI runs but can't reach the Docker engine (Docker Desktop not started). */
+export function isDockerDown(error: unknown): boolean {
+	return error instanceof Error
+		&& /cannot connect to the docker daemon|is the docker daemon running|error during connect|dockerDesktopLinuxEngine|docker_engine/i.test(error.message);
+}
+
+/** True when Docker runs but the database container (or Compose service) is stopped. */
+export function isContainerStopped(error: unknown): boolean {
+	return error instanceof Error && /is not running/i.test(error.message) && !isDockerDown(error);
+}
+
 /** True when CREATE DATABASE … TEMPLATE failed because the template is in use. */
 export function isTemplateInUse(error: unknown): boolean {
 	return error instanceof Error && /is being accessed by other users/i.test(error.message);

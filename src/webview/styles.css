@@ -282,6 +282,16 @@ body {
 	color: var(--ap-pass);
 }
 
+.server.is-debugging .server-dot {
+	color: var(--vscode-debugIcon-startForeground, var(--ap-pass));
+}
+
+.servers {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
 .server-actions {
 	display: flex;
 	gap: 2px;

@@ -4,15 +4,18 @@ import { ServerControl } from '../core/ports';
 import { SKIPPED_DEBUG_TYPES, VsCodeEnvironmentSink } from './environment';
 import { TASK_TYPE } from './taskExecutor';
 
-const SERVER_TASK_NAME = 'Server';
-const SERVER_TASK_ID = 'server';
+const TASK_ID_PREFIX = 'server:';
+/** Keep the sidebar in place instead of switching to the Run and Debug view. */
+const DEBUG_OPTIONS: vscode.DebugSessionOptions = { suppressDebugView: true };
+/** How long after a launch a newly focused debug terminal gives focus back. */
+const FOCUS_GUARD_MS = 5000;
 
 /**
- * Runs the app's server as a background task (so its exit is known and it can be stopped), and
- * tracks launch-type debug sessions so they can be restarted with a new environment.
+ * Runs each server as a background task (so its exit is known and it can be stopped), and tracks
+ * launch-type debug sessions so they can be started, stopped and restarted with a new environment.
  */
 export class VsCodeServer implements ServerControl, vscode.Disposable {
-	private execution: vscode.TaskExecution | undefined;
+	private readonly executions = new Map<string, vscode.TaskExecution>();
 	private readonly sessions = new Map<string, vscode.DebugSession>();
 	private readonly disposables: vscode.Disposable[] = [];
 
@@ -23,10 +26,9 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 	) {
 		this.disposables.push(
 			vscode.tasks.onDidEndTask((event) => {
-				if (event.execution.task.definition.type === TASK_TYPE && event.execution.task.definition.id === SERVER_TASK_ID) {
-					if (this.execution === event.execution || !this.execution) {
-						this.execution = undefined;
-					}
+				const id = serverIdOf(event.execution.task);
+				if (id !== undefined && this.executions.get(id) === event.execution) {
+					this.executions.delete(id);
 					this.onDidChange();
 				}
 			}),
@@ -47,20 +49,16 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 		}
 	}
 
-	isServerRunning(): boolean {
-		return this.execution !== undefined;
+	runningServers(): string[] {
+		return [...this.executions.keys()];
 	}
 
-	runningDebugSessions(): string[] {
-		return [...this.sessions.values()].map((session) => session.name);
-	}
-
-	async startServer(command: string, env: EnvMap, cwd: string): Promise<void> {
-		await this.stopAndWait();
+	async startServer(id: string, label: string, command: string, env: EnvMap, cwd: string): Promise<void> {
+		await this.stopAndWait(id);
 		const task = new vscode.Task(
-			{ type: TASK_TYPE, id: SERVER_TASK_ID },
+			{ type: TASK_TYPE, id: `${TASK_ID_PREFIX}${id}` },
 			this.folder ?? vscode.TaskScope.Workspace,
-			SERVER_TASK_NAME,
+			label,
 			'Automated Processes',
 			new vscode.ShellExecution(command, { cwd, env }),
 		);
@@ -73,16 +71,34 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 			focus: false,
 			echo: true,
 		};
-		this.execution = await vscode.tasks.executeTask(task);
+		this.executions.set(id, await vscode.tasks.executeTask(task));
 		this.onDidChange();
 	}
 
-	stopServer(): void {
-		this.execution?.terminate();
+	stopServer(id: string): void {
+		this.executions.get(id)?.terminate();
 	}
 
-	async restartDebugSessions(): Promise<string[]> {
-		const sessions = [...this.sessions.values()];
+	runningDebugSessions(): string[] {
+		return [...this.sessions.values()].map((session) => session.configuration.name);
+	}
+
+	launchConfigurations(): string[] {
+		return launchConfigurationNames(this.folder);
+	}
+
+	async startDebugging(name: string): Promise<boolean> {
+		return withoutTerminalFocus(() => vscode.debug.startDebugging(this.folder, name, DEBUG_OPTIONS));
+	}
+
+	async stopDebugging(name: string): Promise<void> {
+		for (const session of [...this.sessions.values()].filter((item) => item.configuration.name === name)) {
+			await stopSessionAndWait(session);
+		}
+	}
+
+	async restartDebugSessions(skip: string[]): Promise<string[]> {
+		const sessions = [...this.sessions.values()].filter((session) => !skip.includes(session.configuration.name));
 		const restarted: string[] = [];
 		for (const session of sessions) {
 			const folder = session.workspaceFolder ?? this.folder;
@@ -91,25 +107,25 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 			await stopSessionAndWait(session);
 			// By name, launch.json is resolved again, so the debug provider adds the new database.
 			// Otherwise relaunch the same configuration with the managed variables refreshed.
-			const started = fromLaunchJson
-				? await vscode.debug.startDebugging(folder, configuration.name)
-				: await vscode.debug.startDebugging(folder, { ...configuration, env: { ...configuration.env, ...this.envSink.current } });
+			const started = await withoutTerminalFocus(() => fromLaunchJson
+				? vscode.debug.startDebugging(folder, configuration.name, DEBUG_OPTIONS)
+				: vscode.debug.startDebugging(folder, { ...configuration, env: { ...configuration.env, ...this.envSink.current } }, DEBUG_OPTIONS));
 			if (started) {
-				restarted.push(session.name);
+				restarted.push(configuration.name);
 			}
 		}
 		return restarted;
 	}
 
-	private async stopAndWait(): Promise<void> {
-		const execution = this.execution;
+	private async stopAndWait(id: string): Promise<void> {
+		const execution = this.executions.get(id);
 		if (!execution) {
 			return;
 		}
 		await new Promise<void>((resolve) => {
 			const timer = setTimeout(done, 5000);
 			const listener = vscode.tasks.onDidEndTask((event) => {
-				if (event.execution === execution || event.execution.task.definition.id === SERVER_TASK_ID) {
+				if (event.execution === execution || serverIdOf(event.execution.task) === id) {
 					done();
 				}
 			});
@@ -120,7 +136,7 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 			}
 			execution.terminate();
 		});
-		this.execution = undefined;
+		this.executions.delete(id);
 		// Give the OS a moment to release the server's port.
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
@@ -130,6 +146,12 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 	}
 }
 
+function serverIdOf(task: vscode.Task): string | undefined {
+	const id = task.definition.type === TASK_TYPE ? task.definition.id : undefined;
+	return typeof id === 'string' && id.startsWith(TASK_ID_PREFIX) ? id.slice(TASK_ID_PREFIX.length) : undefined;
+}
+
+/** Launch sessions VS Code started from a configuration; browser and extension-host ones excluded. */
 function isRestartable(session: vscode.DebugSession): boolean {
 	return session.parentSession === undefined
 		&& session.configuration.request === 'launch'
@@ -138,7 +160,29 @@ function isRestartable(session: vscode.DebugSession): boolean {
 
 function launchConfigurationNames(folder: vscode.WorkspaceFolder | undefined): string[] {
 	const configurations = vscode.workspace.getConfiguration('launch', folder?.uri).get<{ name?: string }[]>('configurations') ?? [];
-	return configurations.map((configuration) => configuration.name ?? '');
+	return configurations.map((configuration) => configuration.name ?? '').filter(Boolean);
+}
+
+/**
+ * Runs a debug launch, and when it opens a terminal (`"console": "integratedTerminal"`) that takes
+ * focus, puts focus back on the editor. The terminal stays open in the panel.
+ */
+async function withoutTerminalFocus<T>(launch: () => Thenable<T>): Promise<T> {
+	const before = new Set(vscode.window.terminals);
+	const refocus = (terminal: vscode.Terminal | undefined) => {
+		if (terminal && !before.has(terminal)) {
+			terminal.show(true);
+			void vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+		}
+	};
+	const listeners = [vscode.window.onDidOpenTerminal(refocus), vscode.window.onDidChangeActiveTerminal(refocus)];
+	const dispose = () => listeners.forEach((listener) => listener.dispose());
+	try {
+		return await launch();
+	} finally {
+		// The debug terminal can open after the launch resolves.
+		setTimeout(dispose, FOCUS_GUARD_MS);
+	}
 }
 
 async function stopSessionAndWait(session: vscode.DebugSession): Promise<void> {

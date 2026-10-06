@@ -26,6 +26,10 @@ export interface Ui {
 
 export interface GitPort {
 	currentBranch(): string | undefined;
+	/** Commit HEAD points at. */
+	currentCommit(): string | undefined;
+	/** Files (repo-relative, `/`) that differ between two commits. */
+	changedFiles(from: string, to: string): Promise<string[]>;
 	/** Local branch name → tip commit. */
 	localBranches(): Promise<Map<string, string>>;
 	/** Local branches whose tip is contained in `branch`. */
@@ -46,17 +50,22 @@ export interface EnvironmentSink {
 	apply(additions: EnvMap | undefined, options: { terminals: boolean; description: string }): void;
 }
 
-/** The app's server (in a terminal the extension owns) and running debug sessions. */
+/** The app's servers (each in a terminal the extension owns) and running debug sessions. */
 export interface ServerControl {
-	/** True while the extension's server terminal is running. */
-	isServerRunning(): boolean;
-	/** Names of running debug sessions that would be restarted. */
+	/** Ids of servers whose terminal is running. */
+	runningServers(): string[];
+	/** Starts (or restarts) a server's terminal with this environment. */
+	startServer(id: string, label: string, command: string, env: EnvMap, cwd: string): Promise<void>;
+	stopServer(id: string): void;
+	/** Names of running launch-type debug sessions. */
 	runningDebugSessions(): string[];
-	/** Starts (or restarts) the server terminal with this environment. */
-	startServer(command: string, env: EnvMap, cwd: string): Promise<void>;
-	stopServer(): void;
-	/** Restarts running debug sessions so they pick up the new environment. Returns their names. */
-	restartDebugSessions(): Promise<string[]>;
+	/** Restarts running debug sessions (except those named in `skip`) with the new environment. */
+	restartDebugSessions(skip: string[]): Promise<string[]>;
+	/** Names of the launch configurations in the workspace's launch.json. */
+	launchConfigurations(): string[];
+	/** Starts the named launch configuration; false when VS Code couldn't start it. */
+	startDebugging(name: string): Promise<boolean>;
+	stopDebugging(name: string): Promise<void>;
 }
 
 export interface SettingsWriter {

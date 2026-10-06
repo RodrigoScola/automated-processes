@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { CurrentDatabase, databasesFreeAfterUnlink, findFinishedLinks, isMainBranch, resolveCurrent } from './branches';
-import { BranchChangeMode, Config, ConfigResult, MigrationStream, ScriptDefinition, ServerRestartMode } from './config';
+import { BranchChangeMode, Config, ConfigResult, MigrationStream, ScriptDefinition, ServerDefinition, ServerRestartMode } from './config';
 import { buildGraph, MigrationGraph, planRevert } from './migrationSync';
 import { parseDbUrl } from './dbUrl';
 import { EnvMap } from './envFile';
@@ -16,10 +16,10 @@ import {
 import { matchesAnyGlob, matchesGlob } from './glob';
 import { suggestDatabaseName, testDatabaseName, validateDatabaseName } from './names';
 import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from './ports';
-import { ClientSettings, DatabaseEngine, isTemplateInUse, isToolMissing } from './postgres';
+import { ClientSettings, DatabaseEngine, isContainerStopped, isDockerDown, isTemplateInUse, isToolMissing } from './postgres';
 import { RunState, ScriptRunner } from './scriptRunner';
 import { BranchStore, KeyValueStore } from './store';
-import { ViewState, ViewWarning } from '../shared/protocol';
+import { ViewServer, ViewState, ViewWarning } from '../shared/protocol';
 
 /** An error whose message is shown to the user as is. */
 export class UserError extends Error {}
@@ -60,10 +60,13 @@ const MIGRATIONS_SCRIPT_ID = '__migrations';
 
 export class Controller {
 	private lastBranch: string | undefined;
+	private lastCommit: string | undefined;
 	private started = false;
 	private databases: string[] = [];
 	private dbStatus: ViewState['dbStatus'] = 'unknown';
 	private dbError: string | undefined;
+	/** Why a Docker database is unreachable, when that's known. */
+	private dockerProblem: 'dockerDown' | 'containerStopped' | undefined;
 	private busy: string | undefined;
 	private problems: string[] = [];
 	private current: CurrentDatabase | undefined;
@@ -79,19 +82,32 @@ export class Controller {
 
 	async start(): Promise<void> {
 		this.lastBranch = this.deps.git.currentBranch();
+		this.lastCommit = this.deps.git.currentCommit();
 		this.started = true;
 		await this.refresh();
 		this.initialized = true;
+		if (this.dockerProblem === 'containerStopped') {
+			await this.startDatabase();
+		}
 		await this.checkFinishedBranches();
 	}
 
-	/** Called when git state changes; reacts only to an actual branch switch. */
+	/**
+	 * Called when git state changes. Reacts to a branch switch, and to new commits on the same
+	 * branch (pull, merge, rebase) for `onGitUpdate`.
+	 */
 	async onGitStateChanged(): Promise<void> {
 		if (!this.started) {
 			return;
 		}
 		const branch = this.deps.git.currentBranch();
+		const commit = this.deps.git.currentCommit();
+		const previousCommit = this.lastCommit;
+		this.lastCommit = commit;
 		if (branch === this.lastBranch) {
+			if (branch && previousCommit && commit && previousCommit !== commit) {
+				await this.afterBranchUpdated(branch, previousCommit, commit);
+			}
 			return;
 		}
 		const previousBranch = this.lastBranch;
@@ -161,9 +177,13 @@ export class Controller {
 			this.databases = await this.engineFor(config, root, main).listDatabases();
 			this.dbStatus = 'ok';
 			this.dbError = undefined;
+			this.dockerProblem = undefined;
 		} catch (error) {
 			this.databases = [];
 			this.dbStatus = 'error';
+			this.dockerProblem = !dockerTarget(config) ? undefined
+				: isDockerDown(error) ? 'dockerDown'
+					: isContainerStopped(error) ? 'containerStopped' : undefined;
 			this.dbError = isToolMissing(error) && !dockerTarget(config)
 				? `${messageOf(error)} If PostgreSQL runs in Docker, set automatedProcesses.database.dockerContainer (e.g. "my-db-1", as in \`docker exec -it my-db-1 psql\`) and the tools run inside it.`
 				: messageOf(error);
@@ -250,14 +270,35 @@ export class Controller {
 			run: this.deps.scripts.lastRun,
 			onBranchChange: config.migrations.onBranchChange,
 			importDataOnCreate: config.database.importDataOnCreate,
-			server: {
-				configured: config.server.command !== '',
-				running: this.deps.server.isServerRunning(),
-				debugSessions: this.deps.server.runningDebugSessions(),
-				onDatabaseChange: config.server.onDatabaseChange,
-			},
+			...this.serverView(config),
+			gitUpdate: ((script) => (script ? { label: script.label, mode: config.onGitUpdate.mode } : undefined))(
+				config.scripts.find((item) => item.id === config.onGitUpdate.script),
+			),
 			canStartDatabase: dockerTarget(config) !== undefined,
 			now: this.now(),
+		};
+	}
+
+	private serverView(config: Config): Pick<ViewState, 'servers' | 'otherDebugSessions' | 'serverRestartMode'> {
+		const terminals = new Set(this.deps.server.runningServers());
+		const sessions = this.deps.server.runningDebugSessions();
+		const launch = new Set(this.deps.server.launchConfigurations());
+		const servers: ViewServer[] = config.servers.map((server) => ({
+			id: server.id,
+			label: server.label,
+			status: server.debugConfiguration && sessions.includes(server.debugConfiguration)
+				? 'debugging'
+				: terminals.has(server.id) ? 'running' : 'stopped',
+			canRun: server.command !== '',
+			canDebug: server.debugConfiguration !== '' && launch.has(server.debugConfiguration),
+			debugConfiguration: server.debugConfiguration || undefined,
+			restartOnDatabaseChange: server.restartOnDatabaseChange,
+		}));
+		const owned = new Set(config.servers.map((server) => server.debugConfiguration).filter(Boolean));
+		return {
+			servers,
+			otherDebugSessions: sessions.filter((name) => !owned.has(name)),
+			serverRestartMode: config.server.onDatabaseChange,
 		};
 	}
 
@@ -265,12 +306,24 @@ export class Controller {
 		const warnings: ViewWarning[] = [];
 		if (this.dbStatus === 'error') {
 			const docker = dockerTarget(config);
-			warnings.push({
-				message: docker
-					? `Can't reach the database. Is the "${docker.name}" container running?`
-					: 'Can\'t reach the database server.',
-				action: docker ? { label: 'Start Database', command: 'startDatabase' } : undefined,
-			});
+			if (docker && this.dockerProblem === 'dockerDown') {
+				warnings.push({
+					message: 'Docker isn\'t running. Start Docker, then retry.',
+					action: { label: 'Retry', command: 'connectDatabase' },
+				});
+			} else if (docker && this.dockerProblem === 'containerStopped') {
+				warnings.push({
+					message: `The "${docker.name}" container isn't running.`,
+					action: { label: 'Retry', command: 'connectDatabase' },
+				});
+			} else {
+				warnings.push({
+					message: docker
+						? `Can't reach the database. Is the "${docker.name}" container running?`
+						: 'Can\'t reach the database server.',
+					action: docker ? { label: 'Start Database', command: 'startDatabase' } : undefined,
+				});
+			}
 		}
 		if (this.current && !this.current.linked && branch && !isMainBranch(branch, config.database.mainBranches)) {
 			warnings.push({
@@ -571,6 +624,14 @@ export class Controller {
 		}
 	}
 
+	/** Checks the database again, and starts its container when Docker runs but the container doesn't. */
+	async connectDatabase(): Promise<void> {
+		await this.refresh();
+		if (this.dockerProblem === 'containerStopped') {
+			await this.startDatabase();
+		}
+	}
+
 	async startDatabase(): Promise<void> {
 		await this.guard('Starting database', async () => {
 			const root = this.deps.root();
@@ -732,30 +793,77 @@ export class Controller {
 		this.deps.scripts.cancel();
 	}
 
-	// ── Server ────────────────────────────────────────────────────────────────
+	// ── Servers ───────────────────────────────────────────────────────────────
 
-	async startServer(): Promise<void> {
+	/** Starts a server's command in its own terminal, with the current database. */
+	async startServer(id?: string): Promise<void> {
 		try {
-			const { config } = this.deps.readConfig();
-			if (!config.server.command) {
-				throw new UserError('No server command. Set automatedProcesses.server.command (e.g. the command that starts your backend).');
+			const server = this.server(id);
+			if (!server.command) {
+				throw new UserError(`"${server.label}" has no command; it can only be debugged.`);
 			}
-			await this.deps.server.startServer(config.server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+			await this.stopDebugSessionOf(server);
+			await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
 		} catch (error) {
 			void this.deps.ui.error(messageOf(error));
 		}
 		this.changed();
 	}
 
-	stopServer(): void {
-		this.deps.server.stopServer();
+	/** Stops a server, whether it runs in its terminal or under the debugger. */
+	async stopServer(id?: string): Promise<void> {
+		try {
+			const server = this.server(id);
+			this.deps.server.stopServer(server.id);
+			await this.stopDebugSessionOf(server);
+		} catch (error) {
+			void this.deps.ui.error(messageOf(error));
+		}
 		this.changed();
 	}
 
-	/** Restarts the server terminal (or starts it) and running debug sessions with the current database. */
-	async restartServer(): Promise<void> {
-		const { config } = this.deps.readConfig();
-		const restarted = await this.restartRunning(config.server.command !== '');
+	/** Starts a server under the debugger (its launch.json configuration) with the current database. */
+	async debugServer(id?: string): Promise<void> {
+		try {
+			const server = this.server(id);
+			const name = server.debugConfiguration;
+			if (!name) {
+				throw new UserError(`"${server.label}" has no debugConfiguration (a launch.json configuration name).`);
+			}
+			if (!this.deps.server.launchConfigurations().includes(name)) {
+				throw new UserError(`Launch configuration "${name}" isn't in .vscode/launch.json.`);
+			}
+			// The terminal and the debugged server usually share a port.
+			this.deps.server.stopServer(server.id);
+			if (!await this.deps.server.startDebugging(name)) {
+				throw new UserError(`VS Code couldn't start "${name}".`);
+			}
+		} catch (error) {
+			void this.deps.ui.error(messageOf(error));
+		}
+		this.changed();
+	}
+
+	/**
+	 * Restarts one server the way it's running (terminal or debugger), or, without an id, every
+	 * running server and debug session. Restarting a stopped server starts it.
+	 */
+	async restartServer(id?: string): Promise<void> {
+		if (id !== undefined) {
+			try {
+				const server = this.server(id);
+				if (this.deps.server.runningDebugSessions().includes(server.debugConfiguration)) {
+					await this.stopDebugSessionOf(server);
+					await this.debugServer(server.id);
+				} else {
+					await this.startServer(server.id);
+				}
+			} catch (error) {
+				void this.deps.ui.error(messageOf(error));
+			}
+			return;
+		}
+		const restarted = await this.restartRunning(false);
 		if (restarted.length === 0) {
 			void this.deps.ui.info('Nothing to restart: no server or debug session is running.');
 		}
@@ -769,10 +877,7 @@ export class Controller {
 		this.restartPending = false;
 		const { config } = this.deps.readConfig();
 		const mode = config.server.onDatabaseChange;
-		const running = [
-			...(this.deps.server.isServerRunning() ? ['server'] : []),
-			...this.deps.server.runningDebugSessions(),
-		];
+		const running = this.restartableRunning(config);
 		if (mode === 'off' || running.length === 0 || !this.current) {
 			return;
 		}
@@ -780,30 +885,69 @@ export class Controller {
 		if (mode === 'ask') {
 			// Not awaited: an unanswered notification must not hold up the action that switched.
 			void this.deps.ui.info(`Now using ${database}. Restart ${running.join(', ')} so it uses it too?`, 'Restart')
-				.then((choice) => (choice === 'Restart' ? this.restartRunning(false) : undefined));
+				.then((choice) => (choice === 'Restart' ? this.restartRunning(true) : undefined));
 			return;
 		}
-		const restarted = await this.restartRunning(false);
+		const restarted = await this.restartRunning(true);
 		if (restarted.length > 0) {
 			void this.deps.ui.info(`Restarted ${restarted.join(', ')} on ${database}.`);
 		}
 	}
 
-	/** Restarts what's running; `startIfStopped` also starts the server terminal when it isn't. */
-	private async restartRunning(startIfStopped: boolean): Promise<string[]> {
+	/** Labels of running servers and debug sessions that a database change restarts. */
+	private restartableRunning(config: Config): string[] {
+		const terminals = new Set(this.deps.server.runningServers());
+		const skipped = this.skippedDebugSessions(config);
+		return [
+			...config.servers.filter((server) => server.restartOnDatabaseChange && terminals.has(server.id)).map((server) => server.label),
+			...this.deps.server.runningDebugSessions().filter((name) => !skipped.includes(name)),
+		];
+	}
+
+	/** Debug sessions of servers that opted out of restarting. */
+	private skippedDebugSessions(config: Config): string[] {
+		return config.servers.filter((server) => !server.restartOnDatabaseChange && server.debugConfiguration)
+			.map((server) => server.debugConfiguration);
+	}
+
+	/**
+	 * Restarts running server terminals and debug sessions with the current database.
+	 * `onlyDatabaseDependent` skips servers with `restartOnDatabaseChange: false`.
+	 */
+	private async restartRunning(onlyDatabaseDependent: boolean): Promise<string[]> {
 		const restarted: string[] = [];
 		try {
 			const { config } = this.deps.readConfig();
-			if (config.server.command && (this.deps.server.isServerRunning() || startIfStopped)) {
-				await this.deps.server.startServer(config.server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
-				restarted.push('server');
+			const terminals = new Set(this.deps.server.runningServers());
+			for (const server of config.servers) {
+				if (terminals.has(server.id) && server.command && (server.restartOnDatabaseChange || !onlyDatabaseDependent)) {
+					await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+					restarted.push(server.label);
+				}
 			}
-			restarted.push(...await this.deps.server.restartDebugSessions());
+			restarted.push(...await this.deps.server.restartDebugSessions(onlyDatabaseDependent ? this.skippedDebugSessions(config) : []));
 		} catch (error) {
-			void this.deps.ui.error(`Couldn't restart the server: ${messageOf(error)}`);
+			void this.deps.ui.error(`Couldn't restart: ${messageOf(error)}`);
 		}
 		this.changed();
 		return restarted;
+	}
+
+	private server(id?: string): ServerDefinition {
+		const { config } = this.deps.readConfig();
+		const server = id === undefined ? config.servers[0] : config.servers.find((item) => item.id === id);
+		if (!server) {
+			throw new UserError(id === undefined
+				? 'No servers configured. Add them to automatedProcesses.servers (or set automatedProcesses.server.command).'
+				: `No server with id "${id}" in automatedProcesses.servers.`);
+		}
+		return server;
+	}
+
+	private async stopDebugSessionOf(server: ServerDefinition): Promise<void> {
+		if (server.debugConfiguration && this.deps.server.runningDebugSessions().includes(server.debugConfiguration)) {
+			await this.deps.server.stopDebugging(server.debugConfiguration);
+		}
 	}
 
 	private currentCommandEnv(): EnvMap {
@@ -855,6 +999,41 @@ export class Controller {
 	}
 
 	// ── Internals ─────────────────────────────────────────────────────────────
+
+	/** The branch got new commits (pull, merge, rebase): run the `onGitUpdate` script if it applies. */
+	private async afterBranchUpdated(branch: string, from: string, to: string): Promise<void> {
+		const { config } = this.deps.readConfig();
+		const settings = config.onGitUpdate;
+		const script = config.scripts.find((item) => item.id === settings.script);
+		if (!script || settings.mode === 'off' || (settings.skipMainBranches && isMainBranch(branch, config.database.mainBranches))) {
+			return;
+		}
+		let reason = 'it has new commits';
+		if (settings.whenFilesChange.length > 0) {
+			const changed = (await this.deps.git.changedFiles(from, to).catch(() => []))
+				.filter((file) => matchesAnyGlob(file, settings.whenFilesChange));
+			if (changed.length === 0) {
+				return;
+			}
+			reason = `${changed.join(', ')} changed`;
+		}
+		if (settings.mode === 'ask') {
+			const choice = await this.deps.ui.info(`"${branch}" was updated and ${reason}. Run ${script.label}?`, `Run ${script.label}`);
+			if (choice !== `Run ${script.label}`) {
+				return;
+			}
+		} else {
+			void this.deps.ui.info(`"${branch}" was updated and ${reason}. Running ${script.label}…`);
+		}
+		const state = await this.runScript(script.id);
+		if (state?.status === 'failed') {
+			void this.deps.ui.error(`${script.label} failed. See the terminal for details.`);
+		}
+	}
+
+	async setGitUpdateMode(value: BranchChangeMode): Promise<void> {
+		await this.deps.settings.update('onGitUpdate.mode', value);
+	}
 
 	private async afterBranchSwitch(branch: string): Promise<void> {
 		const { config } = this.deps.readConfig();

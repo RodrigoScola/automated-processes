@@ -60,6 +60,10 @@ export class VsCodeGit extends GitCli implements GitPort, vscode.Disposable {
 		return this.repository?.state.HEAD?.name;
 	}
 
+	currentCommit(): string | undefined {
+		return this.repository?.state.HEAD?.commit;
+	}
+
 	dispose(): void {
 		this.disposables.forEach((disposable) => disposable.dispose());
 		this.changeEmitter.dispose();

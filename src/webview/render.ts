@@ -1,6 +1,6 @@
 /** Pure state → HTML rendering for the sidebar. Runs in the webview; unit-tested in Node. */
 
-import { ViewDatabase, ViewRun, ViewRunStep, ViewScript, ViewState } from '../shared/protocol';
+import { ViewDatabase, ViewRun, ViewRunStep, ViewScript, ViewServer, ViewState } from '../shared/protocol';
 
 export function escapeHtml(value: string): string {
 	return value
@@ -174,39 +174,50 @@ function renderScriptsSection(state: ViewState, now: number): string {
 		: '';
 	return `<section class="section">
 		<header class="section-header"><h2>Scripts</h2></header>
-		${renderServer(state)}
+		${renderServers(state)}
 		<div class="scripts">${scripts}${migrations}</div>
 		${empty}
 		${state.run ? renderRun(state.run, state.scripts, now) : ''}
 	</section>`;
 }
 
-function renderServer(state: ViewState): string {
-	const server = state.server;
-	if (!server.configured && server.debugSessions.length === 0) {
-		return '';
+const SERVER_STATUS: Record<ViewServer['status'], string> = { stopped: 'stopped', running: 'running', debugging: 'debugging' };
+
+function renderServers(state: ViewState): string {
+	const rows = state.servers.map((server) => renderServerRow(server, state.serverRestartMode));
+	if (state.otherDebugSessions.length > 0) {
+		rows.push(`<div class="server is-running">
+			${icon('debug-alt', 'server-dot')}
+			<div class="db-text"><span class="truncate">debugging ${e(state.otherDebugSessions.join(', '))}</span><span class="truncate db-detail">${e(restartNote(true, state.serverRestartMode))}</span></div>
+			<div class="server-actions">${iconButton('debug-restart', 'Restart with the current database', 'data-command="restartServer"')}</div>
+		</div>`);
 	}
-	const parts: string[] = [];
-	if (server.configured) {
-		parts.push(server.running ? 'server running' : 'server stopped');
-	}
-	if (server.debugSessions.length) {
-		parts.push(`debugging ${server.debugSessions.join(', ')}`);
-	}
-	const running = server.running || server.debugSessions.length > 0;
-	const restartNote = server.onDatabaseChange === 'off'
-		? 'not restarted on database change'
-		: server.onDatabaseChange === 'ask' ? 'asks to restart on database change' : 'restarts on database change';
+	return rows.length ? `<div class="servers">${rows.join('')}</div>` : '';
+}
+
+function renderServerRow(server: ViewServer, mode: ViewState['serverRestartMode']): string {
+	const id = `data-server="${e(server.id)}"`;
+	const active = server.status !== 'stopped';
 	const buttons = [
-		server.configured && !server.running ? iconButton('play', 'Start server', 'data-command="startServer"') : '',
-		running ? iconButton('debug-restart', 'Restart with the current database', 'data-command="restartServer"') : '',
-		server.running ? iconButton('debug-stop', 'Stop server', 'data-command="stopServer"') : '',
+		server.canRun && server.status !== 'running' ? iconButton('play', `Run ${server.label}`, `data-command="startServer" ${id}`) : '',
+		server.canDebug && server.status !== 'debugging'
+			? iconButton('debug-alt', `Debug ${server.label} (${server.debugConfiguration})`, `data-command="debugServer" ${id}`)
+			: '',
+		active ? iconButton('debug-restart', `Restart ${server.label} with the current database`, `data-command="restartServer" ${id}`) : '',
+		active ? iconButton('debug-stop', `Stop ${server.label}`, `data-command="stopServer" ${id}`) : '',
 	].join('');
-	return `<div class="server${running ? ' is-running' : ''}">
-		${icon(running ? 'circle-filled' : 'circle-outline', 'server-dot')}
-		<div class="db-text"><span class="truncate">${e(parts.join(' · '))}</span><span class="truncate db-detail">${e(restartNote)}</span></div>
+	return `<div class="server${active ? ' is-running' : ''}${server.status === 'debugging' ? ' is-debugging' : ''}">
+		${icon(server.status === 'debugging' ? 'debug-alt' : active ? 'circle-filled' : 'circle-outline', 'server-dot')}
+		<div class="db-text"><span class="truncate">${e(server.label)} · ${SERVER_STATUS[server.status]}</span><span class="truncate db-detail">${e(restartNote(server.restartOnDatabaseChange, mode))}</span></div>
 		<div class="server-actions">${buttons}</div>
 	</div>`;
+}
+
+function restartNote(restarts: boolean, mode: ViewState['serverRestartMode']): string {
+	if (!restarts || mode === 'off') {
+		return 'not restarted on database change';
+	}
+	return mode === 'ask' ? 'asks to restart on database change' : 'restarts on database change';
 }
 
 function renderScript(script: ViewScript, busy: boolean): string {
@@ -275,9 +286,14 @@ function renderFooter(state: ViewState): string {
 		</label>
 		<label class="footer-row"><span title="When the current database changes, restart the server started from here and running debug sessions so they use it.">Restart server on database change</span>
 			<vscode-single-select class="branch-mode" data-server-restart aria-label="Restart server on database change">
-				${(['restart', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.server.onDatabaseChange === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
+				${(['restart', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.serverRestartMode === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
 			</vscode-single-select>
 		</label>
+		${state.gitUpdate ? `<label class="footer-row"><span title="Runs &quot;${e(state.gitUpdate.label)}&quot; when this branch gets new commits from a pull, merge or rebase (only when the watched files changed).">${e(state.gitUpdate.label)} automatically</span>
+			<vscode-single-select class="branch-mode" data-git-update aria-label="${e(state.gitUpdate.label)} automatically">
+				${(['always', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.gitUpdate?.mode === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
+			</vscode-single-select>
+		</label>` : ''}
 	</footer>`;
 }
 

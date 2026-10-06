@@ -26,6 +26,11 @@ export class GitCli {
 		return new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
 	}
 
+	async changedFiles(from: string, to: string): Promise<string[]> {
+		const output = await this.git(['diff', '--name-only', from, to]);
+		return output.split(/\r?\n/).filter(Boolean);
+	}
+
 	async listFiles(dir: string, ref?: string): Promise<string[]> {
 		if (ref) {
 			const output = await this.git(['ls-tree', '-r', '--name-only', ref, '--', toGitPath(dir)]);

@@ -68,12 +68,32 @@ export interface Config {
 		streams: MigrationStream[];
 	};
 	server: {
-		/** Command that runs the app's server in a terminal the extension owns. */
-		command: string;
 		/** What to do with running servers and debug sessions when the current database changes. */
 		onDatabaseChange: ServerRestartMode;
 	};
+	/** Servers with run/debug buttons (`servers`, or the single legacy `server.command`). */
+	servers: ServerDefinition[];
+	/** A script to run when the current branch gets new commits (pull, merge, rebase). */
+	onGitUpdate: {
+		/** Id of a script in `scripts`; empty = off. */
+		script: string;
+		mode: BranchChangeMode;
+		/** Only when one of these files (globs, repo-relative) changed; empty = on every update. */
+		whenFilesChange: string[];
+		skipMainBranches: boolean;
+	};
 	scripts: ScriptDefinition[];
+}
+
+export interface ServerDefinition {
+	id: string;
+	label: string;
+	/** Runs the server in a terminal the extension owns; empty = debug only. */
+	command: string;
+	/** launch.json configuration the debug button starts; empty = no debug button. */
+	debugConfiguration: string;
+	/** Restart it when the current database changes (off for e.g. a frontend). */
+	restartOnDatabaseChange: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -103,8 +123,14 @@ export const DEFAULT_CONFIG: Config = {
 		streams: [],
 	},
 	server: {
-		command: '',
 		onDatabaseChange: 'restart',
+	},
+	servers: [],
+	onGitUpdate: {
+		script: '',
+		mode: 'always',
+		whenFilesChange: [],
+		skipMainBranches: false,
 	},
 	scripts: [],
 };
@@ -148,12 +174,59 @@ export function readConfig(read: SettingReader): ConfigResult {
 			streams: readStreams(read('migrations.streams'), problems),
 		},
 		server: {
-			command: str(read('server.command'), d.server.command, true),
 			onDatabaseChange: oneOf(read('server.onDatabaseChange'), ['restart', 'ask', 'off'], d.server.onDatabaseChange),
+		},
+		servers: readServers(read('servers'), read('server.command'), read('server.debugConfiguration'), problems),
+		onGitUpdate: {
+			script: str(read('onGitUpdate.script'), d.onGitUpdate.script, true),
+			mode: oneOf(read('onGitUpdate.mode'), ['off', 'ask', 'always'], d.onGitUpdate.mode),
+			whenFilesChange: strList(read('onGitUpdate.whenFilesChange'), d.onGitUpdate.whenFilesChange, true),
+			skipMainBranches: bool(read('onGitUpdate.skipMainBranches'), d.onGitUpdate.skipMainBranches),
 		},
 		scripts: readScripts(read('scripts'), problems),
 	};
+	if (config.onGitUpdate.script && !config.scripts.some((script) => script.id === config.onGitUpdate.script)) {
+		problems.push(`onGitUpdate.script: no script with id "${config.onGitUpdate.script}" in scripts.`);
+	}
 	return { config, problems };
+}
+
+function readServers(raw: unknown, legacyCommand: unknown, legacyDebug: unknown, problems: string[]): ServerDefinition[] {
+	if (raw === undefined || raw === null || (Array.isArray(raw) && raw.length === 0)) {
+		const command = str(legacyCommand, '', true);
+		const debugConfiguration = str(legacyDebug, '', true);
+		return command || debugConfiguration
+			? [{ id: 'server', label: 'Server', command, debugConfiguration, restartOnDatabaseChange: true }]
+			: [];
+	}
+	if (!Array.isArray(raw)) {
+		problems.push('servers must be a list.');
+		return [];
+	}
+	const servers: ServerDefinition[] = [];
+	const seen = new Set<string>();
+	raw.forEach((item, index) => {
+		const where = `servers[${index}]`;
+		if (!isObject(item)) {
+			problems.push(`${where} must be an object.`);
+			return;
+		}
+		const label = str(item.label, '');
+		const command = str(item.command, '', true);
+		const debugConfiguration = str(item.debugConfiguration, '', true);
+		if (!label || (!command && !debugConfiguration)) {
+			problems.push(`${where} needs a "label" and a "command" or "debugConfiguration".`);
+			return;
+		}
+		const id = str(item.id, label);
+		if (seen.has(id)) {
+			problems.push(`${where}: duplicate id "${id}".`);
+			return;
+		}
+		seen.add(id);
+		servers.push({ id, label, command, debugConfiguration, restartOnDatabaseChange: bool(item.restartOnDatabaseChange, true) });
+	});
+	return servers;
 }
 
 function readStreams(raw: unknown, problems: string[]): MigrationStream[] {

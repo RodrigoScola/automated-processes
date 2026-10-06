@@ -19,7 +19,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
 ## Requirements
 
 - PostgreSQL, either in Docker (`database.dockerContainer` or `database.dockerComposeService`; nothing to
-  install locally) or with `psql`, `pg_dump` and `pg_restore` on PATH.
+  install locally) or with `psql`, `pg_dump` and `pg_restore` on PATH. In Docker, a stopped database
+  container is started when the extension starts; if Docker itself isn't running, the sidebar shows
+  a Retry button for when it is.
 - The user in the database URL needs the `CREATEDB` permission.
 
 ## Settings
@@ -45,7 +47,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
 | `migrations.onBranchChange` | `ask` | `off` / `ask` / `always` |
 | `migrations.afterCopy` | `true` | Run migrations after **Export Data** |
 | `migrations.streams` | `[]` | Migration histories for **Sync Migrations** (see below) |
-| `server.command` | `""` | Command that starts your server (Start/Stop/Restart in the sidebar) |
+| `servers` | `[]` | Servers in the sidebar (`label`, `command`, `debugConfiguration`, `restartOnDatabaseChange`), each with run, debug, restart and stop |
+| `server.command` | `""` | Single-server shortcut, used only when `servers` is empty |
+| `onGitUpdate.script` | `""` | Script to run when the branch gets new commits (pull, merge, rebase) |
+| `onGitUpdate.mode` | `always` | `always` / `ask` / `off` |
+| `onGitUpdate.whenFilesChange` | `[]` | Only when these files changed (e.g. `uv.lock`, `package-lock.json`) |
+| `onGitUpdate.skipMainBranches` | `false` | Don't run it on the main branches |
 | `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
 | `scripts` | `[]` | Sidebar script buttons |
 

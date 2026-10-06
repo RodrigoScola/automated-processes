@@ -19,7 +19,7 @@ suite('Extension (in VS Code)', function () {
 
 	test('registers its commands', async () => {
 		const commands = await vscode.commands.getCommands(true);
-		for (const name of ['newDatabase', 'migrate', 'switchDatabase', 'switchBack', 'removeDatabase', 'cleanUpDatabases', 'runMigrations', 'runScript', 'startDatabase', 'refresh', 'openSettings']) {
+		for (const name of ['newDatabase', 'migrate', 'switchDatabase', 'switchBack', 'removeDatabase', 'cleanUpDatabases', 'runMigrations', 'runScript', 'startDatabase', 'connectDatabase', 'refresh', 'openSettings']) {
 			assert.ok(commands.includes(`automated-processes.${name}`), name);
 		}
 	});
@@ -51,6 +51,8 @@ suite('Extension (in VS Code)', function () {
 		fs.rmSync(output, { force: true });
 	});
 
+	const serverRunning = () => controller.snapshot().servers.find((server) => server.id === 'server')?.status === 'running';
+
 	test('starts, restarts and stops the server as a task with the database environment', async () => {
 		const output = path.join(workspace(), 'server-output.json');
 		const readOutput = async (): Promise<{ DATABASE_URL: string; pid: number }> => {
@@ -64,22 +66,22 @@ suite('Extension (in VS Code)', function () {
 		};
 		fs.rmSync(output, { force: true });
 
-		await controller.startServer();
+		await controller.startServer('server');
 		const first = await readOutput();
 		assert.strictEqual(first.DATABASE_URL, 'postgres://fixture:fixture-pw@127.0.0.1:1/fixture_app');
-		assert.strictEqual(controller.snapshot().server.running, true);
+		assert.strictEqual(serverRunning(), true);
 
 		fs.rmSync(output, { force: true });
-		await controller.restartServer();
+		await controller.restartServer('server');
 		const second = await readOutput();
 		assert.notStrictEqual(second.pid, first.pid, 'a new process');
-		assert.strictEqual(controller.snapshot().server.running, true);
+		assert.strictEqual(serverRunning(), true);
 
-		controller.stopServer();
-		for (let attempt = 0; attempt < 50 && controller.snapshot().server.running; attempt++) {
+		await controller.stopServer('server');
+		for (let attempt = 0; attempt < 50 && serverRunning(); attempt++) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
-		assert.strictEqual(controller.snapshot().server.running, false);
+		assert.strictEqual(serverRunning(), false);
 		fs.rmSync(output, { force: true });
 	});
 

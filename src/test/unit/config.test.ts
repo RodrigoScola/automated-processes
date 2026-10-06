@@ -147,6 +147,50 @@ suite('config', () => {
 		assert.deepStrictEqual(read({ 'migrations.streams': 'x' }).problems, ['migrations.streams must be a list.']);
 	});
 
+	test('reads servers, defaulting ids and restartOnDatabaseChange', () => {
+		const { config, problems } = read({
+			servers: [
+				{ label: 'Backend', command: 'uv run uvicorn app:app', debugConfiguration: 'Backend: FastAPI' },
+				{ id: 'web', label: 'Frontend', command: 'npm run dev', restartOnDatabaseChange: false },
+				{ label: 'Debug only', debugConfiguration: 'Attach' },
+				{ label: 'Nothing' },
+				{ label: 'Backend', command: 'dup' },
+			],
+		});
+		assert.deepStrictEqual(config.servers, [
+			{ id: 'Backend', label: 'Backend', command: 'uv run uvicorn app:app', debugConfiguration: 'Backend: FastAPI', restartOnDatabaseChange: true },
+			{ id: 'web', label: 'Frontend', command: 'npm run dev', debugConfiguration: '', restartOnDatabaseChange: false },
+			{ id: 'Debug only', label: 'Debug only', command: '', debugConfiguration: 'Attach', restartOnDatabaseChange: true },
+		]);
+		assert.deepStrictEqual(problems, [
+			'servers[3] needs a "label" and a "command" or "debugConfiguration".',
+			'servers[4]: duplicate id "Backend".',
+		]);
+	});
+
+	test('the single-server settings become one server when servers is empty', () => {
+		assert.deepStrictEqual(read({ 'server.command': 'serve', servers: [] }).config.servers, [
+			{ id: 'server', label: 'Server', command: 'serve', debugConfiguration: '', restartOnDatabaseChange: true },
+		]);
+		assert.deepStrictEqual(read({}).config.servers, []);
+		assert.strictEqual(read({ 'server.command': 'old', servers: [{ label: 'New', command: 'new' }] }).config.servers[0].label, 'New');
+	});
+
+	test('reads onGitUpdate and checks the script exists', () => {
+		const scripts = [{ id: 'deps', label: 'Deps', steps: [{ run: 'npm ci' }] }];
+		const { config, problems } = read({
+			scripts,
+			'onGitUpdate.script': 'deps',
+			'onGitUpdate.mode': 'ask',
+			'onGitUpdate.whenFilesChange': ['uv.lock'],
+			'onGitUpdate.skipMainBranches': true,
+		});
+		assert.deepStrictEqual(config.onGitUpdate, { script: 'deps', mode: 'ask', whenFilesChange: ['uv.lock'], skipMainBranches: true });
+		assert.deepStrictEqual(problems, []);
+		assert.deepStrictEqual(read({ 'onGitUpdate.script': 'missing' }).problems, ['onGitUpdate.script: no script with id "missing" in scripts.']);
+		assert.strictEqual(read({}).config.onGitUpdate.mode, 'always');
+	});
+
 	test('rejects a non-list scripts value and non-string env values', () => {
 		const { problems } = read({ scripts: { a: 1 }, env: { A: { nested: true } } });
 		assert.ok(problems.some((problem) => problem === 'scripts must be a list.'));

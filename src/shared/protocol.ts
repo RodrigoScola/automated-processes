@@ -35,6 +35,18 @@ export interface ViewRun {
 	steps: ViewRunStep[];
 }
 
+export interface ViewServer {
+	id: string;
+	label: string;
+	status: 'stopped' | 'running' | 'debugging';
+	/** It has a command (the run button). */
+	canRun: boolean;
+	/** Its launch configuration exists (the debug button). */
+	canDebug: boolean;
+	debugConfiguration?: string;
+	restartOnDatabaseChange: boolean;
+}
+
 export interface ViewScript {
 	id: string;
 	label: string;
@@ -75,14 +87,12 @@ export interface ViewState {
 	onBranchChange: BranchChangeMode;
 	/** New Database copies the main database's data into the new one. */
 	importDataOnCreate: boolean;
-	server: {
-		/** A server command is configured. */
-		configured: boolean;
-		running: boolean;
-		/** Running debug sessions that are restarted along with the server. */
-		debugSessions: string[];
-		onDatabaseChange: 'restart' | 'ask' | 'off';
-	};
+	/** The script run after pulls/merges (`onGitUpdate`), when one is configured. */
+	gitUpdate?: { label: string; mode: BranchChangeMode };
+	servers: ViewServer[];
+	/** Debug sessions not tied to a configured server (also restarted on database change). */
+	otherDebugSessions: string[];
+	serverRestartMode: 'restart' | 'ask' | 'off';
 	canStartDatabase: boolean;
 	now: number;
 }
@@ -97,8 +107,10 @@ export type CommandName =
 	| 'runMigrations'
 	| 'syncMigrations'
 	| 'startDatabase'
+	| 'connectDatabase'
 	| 'startServer'
 	| 'stopServer'
+	| 'debugServer'
 	| 'restartServer'
 	| 'refresh'
 	| 'openSettings'
@@ -107,7 +119,7 @@ export type CommandName =
 
 export type WebviewMessage =
 	| { type: 'ready' }
-	| { type: 'command'; command: CommandName; database?: string }
+	| { type: 'command'; command: CommandName; database?: string; server?: string }
 	| { type: 'migrateFrom'; database: string }
 	| { type: 'migrateTo'; database: string }
 	| { type: 'runScript'; scriptId: string; step?: number }
@@ -115,6 +127,7 @@ export type WebviewMessage =
 	| { type: 'setShowHidden'; value: boolean }
 	| { type: 'setOnBranchChange'; value: BranchChangeMode }
 	| { type: 'setImportDataOnCreate'; value: boolean }
-	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' };
+	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' }
+	| { type: 'setGitUpdateMode'; value: BranchChangeMode };
 
 export type ExtensionMessage = { type: 'state'; state: ViewState };
