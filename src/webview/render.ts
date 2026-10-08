@@ -71,7 +71,7 @@ function renderProblems(state: ViewState): string {
 	}
 	return `<div class="banner banner-error">${icon('error')}<div><strong>Settings need attention</strong><ul>${state.problems
 		.map((problem) => `<li>${e(problem)}</li>`)
-		.join('')}</ul><button class="link" data-command="openSettings">Open settings</button></div></div>`;
+		.join('')}</ul><button class="link" data-command="configure">Configure</button> · <button class="link" data-command="openSettings">Open settings</button></div></div>`;
 }
 
 function renderDatabaseSection(state: ViewState, now: number): string {
@@ -85,7 +85,7 @@ function renderDatabaseSection(state: ViewState, now: number): string {
 	return `<section class="section">
 		<header class="section-header">
 			<h2>Database</h2>
-			<div class="toolbar">${iconButton('refresh', 'Refresh', 'data-command="refresh"')}</div>
+			<div class="toolbar">${iconButton('settings-gear', 'Database connection', 'data-command="configure" data-section="database"')}${iconButton('refresh', 'Refresh', 'data-command="refresh"')}</div>
 		</header>
 		${warnings}
 		${renderCurrentCard(state, now)}
@@ -133,10 +133,14 @@ function renderDatabaseList(state: ViewState): string {
 		return `<div class="hint hint-error" title="${e(state.dbError ?? '')}">${e(shorten(state.dbError ?? 'Database unavailable.', 160))}</div>`;
 	}
 	const rows = state.databases.map((db) => renderDatabaseRow(db, Boolean(state.busy))).join('');
-	const toggle = state.hiddenCount > 0
+	// Main and current only, until "Show all" is ticked; hidden ones only matter then.
+	const showAll = state.showAll || state.moreCount > 0
+		? `<vscode-checkbox class="hidden-toggle" data-toggle="showAll"${state.showAll ? ' checked' : ''}>Show all databases${state.showAll ? '' : ` (${state.moreCount} more)`}</vscode-checkbox>`
+		: '';
+	const hidden = state.showAll && state.hiddenCount > 0
 		? `<vscode-checkbox class="hidden-toggle" data-toggle="showHidden"${state.showHidden ? ' checked' : ''}>Show hidden (${state.hiddenCount})</vscode-checkbox>`
 		: '';
-	return `<div class="subheader">Databases</div><ul class="db-list" role="list">${rows}</ul>${toggle}`;
+	return `<div class="subheader">Databases</div><ul class="db-list" role="list">${rows}</ul>${showAll}${hidden}`;
 }
 
 function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
@@ -170,10 +174,12 @@ function renderScriptsSection(state: ViewState, now: number): string {
 	].join('');
 	const migrations = migrationButtons ? `<div class="script">${migrationButtons}</div>` : '';
 	const empty = !scripts && !migrations
-		? '<div class="hint">No scripts yet. Add them in <button class="link" data-command="openSettings">settings</button> (<code>automatedProcesses.scripts</code>).</div>'
+		? '<div class="hint">No scripts yet. <button class="link" data-command="configure" data-section="scripts">Add a script</button> or <button class="link" data-command="configure" data-section="servers">a server</button>.</div>'
 		: '';
 	return `<section class="section">
-		<header class="section-header"><h2>Scripts</h2></header>
+		<header class="section-header"><h2>Scripts</h2>
+			<div class="toolbar">${iconButton('server-process', 'Add or edit servers', 'data-command="configure" data-section="servers"')}${iconButton('settings-gear', 'Add or edit scripts', 'data-command="configure" data-section="scripts"')}</div>
+		</header>
 		${renderServers(state)}
 		<div class="scripts">${scripts}${migrations}</div>
 		${empty}

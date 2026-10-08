@@ -41,6 +41,9 @@ function bindInputs(): void {
 	root.querySelectorAll<HTMLElement & { checked: boolean }>('vscode-checkbox[data-toggle="showHidden"]').forEach((checkbox) => {
 		checkbox.addEventListener('change', () => post({ type: 'setShowHidden', value: checkbox.checked }));
 	});
+	root.querySelectorAll<HTMLElement & { checked: boolean }>('vscode-checkbox[data-toggle="showAll"]').forEach((checkbox) => {
+		checkbox.addEventListener('change', () => post({ type: 'setShowAll', value: checkbox.checked }));
+	});
 	root.querySelectorAll<HTMLElement & { value: string }>('vscode-single-select[data-git-update]').forEach((select) => {
 		select.addEventListener('change', () => post({ type: 'setGitUpdateMode', value: select.value as BranchChangeMode }));
 	});
@@ -67,7 +70,13 @@ root.addEventListener('click', (event) => {
 	} else if (data.migrateTo) {
 		post({ type: 'migrateTo', database: data.migrateTo });
 	} else if (data.command) {
-		post({ type: 'command', command: data.command as CommandName, database: data.database, server: data.server });
+		post({
+			type: 'command',
+			command: data.command as CommandName,
+			database: data.database,
+			server: data.server,
+			section: data.section as 'database' | 'servers' | 'scripts' | undefined,
+		});
 	}
 });
 

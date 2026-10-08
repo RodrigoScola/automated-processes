@@ -75,9 +75,15 @@ export interface ViewState {
 	};
 	dbStatus: 'unknown' | 'loading' | 'ok' | 'error';
 	dbError?: string;
+	/** Databases to list: main and current only, unless `showAll`. */
 	databases: ViewDatabase[];
 	hiddenCount: number;
 	showHidden: boolean;
+	showAll: boolean;
+	/** Databases left out because `showAll` is off. */
+	moreCount: number;
+	/** Every database on the server. */
+	totalDatabases: number;
 	busy?: string;
 	scripts: ViewScript[];
 	hasMigrations: boolean;
@@ -115,16 +121,18 @@ export type CommandName =
 	| 'refresh'
 	| 'openSettings'
 	| 'cancelRun'
-	| 'showOutput';
+	| 'showOutput'
+	| 'configure';
 
 export type WebviewMessage =
 	| { type: 'ready' }
-	| { type: 'command'; command: CommandName; database?: string; server?: string }
+	| { type: 'command'; command: CommandName; database?: string; server?: string; section?: 'database' | 'servers' | 'scripts' }
 	| { type: 'migrateFrom'; database: string }
 	| { type: 'migrateTo'; database: string }
 	| { type: 'runScript'; scriptId: string; step?: number }
 	| { type: 'setInput'; scriptId: string; name: string; value: string }
 	| { type: 'setShowHidden'; value: boolean }
+	| { type: 'setShowAll'; value: boolean }
 	| { type: 'setOnBranchChange'; value: BranchChangeMode }
 	| { type: 'setImportDataOnCreate'; value: boolean }
 	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' }

@@ -9,7 +9,9 @@ import { ScriptRunner } from './core/scriptRunner';
 import { SqliteEngine } from './core/sqlite';
 import { BranchStore } from './core/store';
 import { WebviewMessage } from './shared/protocol';
+import { ConfigurePanel } from './vscode/configurePanel';
 import { VsCodeEnvironmentSink } from './vscode/environment';
+import { Overrides } from './vscode/overrides';
 import { VsCodeGit } from './vscode/git';
 import { VsCodeServer } from './vscode/server';
 import { readSettings, SECTION, VsCodeSettings } from './vscode/settings';
@@ -24,7 +26,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	const root = folder?.uri.fsPath;
 
-	const echoCommands = () => readSettings(folder).config.echoCommands;
+	const overrides = new Overrides(context.workspaceState, context.secrets, folder);
+	await overrides.load();
+	const settings = () => readSettings(folder, overrides);
+	const echoCommands = () => settings().config.echoCommands;
 	const executor = new TaskExecutor(folder, echoCommands);
 	const git = new VsCodeGit(root ?? '');
 	const envSink = new VsCodeEnvironmentSink(context, folder);
@@ -40,13 +45,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		settings: new VsCodeSettings(folder),
 		envSink,
 		scripts: new ScriptRunner(executor, () => notify()),
-		readConfig: () => readSettings(folder),
+		readConfig: settings,
 		root: () => root,
 		readEnv,
 		createEngine: (settings) => (settings.engine === 'sqlite' ? new SqliteEngine(settings) : new PostgresEngine(settings)),
 		server,
 		processEnv: process.env,
 		onDidChange: () => notify(),
+	});
+
+	const panel = new ConfigurePanel({
+		extensionUri: context.extensionUri,
+		folder,
+		overrides,
+		readEnv,
+		refresh: () => controller.refresh(),
+		connectionStatus: () => {
+			const state = controller.snapshot();
+			if (state.dbStatus === 'ok') {
+				const count = state.totalDatabases;
+				return { ok: true, message: `Connected: ${count} database${count === 1 ? '' : 's'}, main is ${state.current?.mainName ?? '?'}.` };
+			}
+			return { ok: false, message: state.problems[0] ?? state.dbError ?? 'Couldn\'t connect.' };
+		},
 	});
 
 	function notify(): void {
@@ -63,10 +84,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		server,
 		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
 		vscode.debug.registerDebugConfigurationProvider('*', envSink),
-		...registerCommands(controller, executor),
+		panel,
+		...registerCommands(controller, executor, panel),
 		vscode.workspace.onDidChangeConfiguration((event) => {
-			if (event.affectsConfiguration(SECTION)) {
-				void controller.refresh();
+			// launch.json configurations are servers too.
+			if (event.affectsConfiguration(SECTION) || event.affectsConfiguration('launch')) {
+				void controller.refresh().then(() => panel.update());
 			}
 		}),
 	);
@@ -94,14 +117,19 @@ export function deactivate(): void {}
 function readEnv(root: string, config: Config): ProjectEnv {
 	const main = readEnvFile(root, config.envFile);
 	if (!main) {
+		// With a URL entered in the Configure panel, the env file is optional.
+		if (config.database.url) {
+			return { main: {}, test: config.testDatabase.envFile ? readEnvFile(root, config.testDatabase.envFile) ?? {} : {} };
+		}
 		throw new Error(`${config.envFile} not found in ${path.basename(root)}.`);
 	}
 	const test = config.testDatabase.envFile ? readEnvFile(root, config.testDatabase.envFile) ?? {} : main;
 	return { main, test };
 }
 
-function registerCommands(controller: Controller, executor: TaskExecutor): vscode.Disposable[] {
+function registerCommands(controller: Controller, executor: TaskExecutor, panel: ConfigurePanel): vscode.Disposable[] {
 	const commands: Record<string, (...args: unknown[]) => unknown> = {
+		configure: (tab?: unknown) => panel.show(tab === 'servers' || tab === 'scripts' ? tab : 'database'),
 		newDatabase: () => controller.newDatabase(),
 		migrate: () => controller.migrate(),
 		switchDatabase: (name?: unknown) => controller.switchDatabase(typeof name === 'string' ? name : undefined),
@@ -170,7 +198,7 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			if (message.command === 'showOutput') {
 				executor.showOutput();
 			} else {
-				await vscode.commands.executeCommand(`${COMMAND_PREFIX}.${message.command}`, message.database ?? message.server);
+				await vscode.commands.executeCommand(`${COMMAND_PREFIX}.${message.command}`, message.database ?? message.server ?? message.section);
 			}
 			return;
 		case 'migrateFrom':
@@ -182,6 +210,8 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			return;
 		case 'setInput':
 			return controller.setInput(message.scriptId, message.name, message.value);
+		case 'setShowAll':
+			return controller.setShowAll(message.value);
 		case 'setShowHidden':
 			return controller.setShowHidden(message.value);
 		case 'setOnBranchChange':

@@ -9,5 +9,5 @@
 		"skipLibCheck": true,
 		"types": []
 	},
-	"include": ["main.ts", "render.ts", "../shared/protocol.ts"]
+	"include": ["main.ts", "render.ts", "panel.ts", "panelRender.ts", "../shared/protocol.ts", "../shared/panelProtocol.ts"]
 }

@@ -130,10 +130,16 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "automated-processes.configure",
+        "title": "Configure Database, Servers and Scripts",
+        "category": "Automated Processes",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "automated-processes.openSettings",
         "title": "Open Settings",
         "category": "Automated Processes",
-        "icon": "$(settings-gear)"
+        "icon": "$(json)"
       },
       {
         "command": "automated-processes.cancelRun",
@@ -149,9 +155,14 @@
     "menus": {
       "view/title": [
         {
-          "command": "automated-processes.openSettings",
+          "command": "automated-processes.configure",
           "when": "view == automatedProcesses.sidebar",
           "group": "navigation"
+        },
+        {
+          "command": "automated-processes.openSettings",
+          "when": "view == automatedProcesses.sidebar",
+          "group": "more"
         }
       ]
     },
@@ -217,6 +228,22 @@
           "order": 5,
           "markdownDescription": "Print each command at the top of its terminal, with placeholders filled in. Turn off if commands contain secrets (e.g. `${db.url}` with a password), so they don't show up in terminal output."
         },
+        "automatedProcesses.database.engine": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "postgres",
+            "sqlite"
+          ],
+          "enumDescriptions": [
+            "PostgreSQL, unless the URL is a SQLite one (sqlite:///…, file:…, or a path ending in .db).",
+            "PostgreSQL.",
+            "SQLite: each database is a file next to the main one."
+          ],
+          "default": "auto",
+          "order": 9,
+          "markdownDescription": "Database engine. Also set in **Configure** (gear in the sidebar), where you can enter the connection URL instead of reading it from the env file."
+        },
         "automatedProcesses.database.urlVariables": {
           "type": "array",
           "items": {
@@ -262,6 +289,12 @@
           "default": true,
           "order": 13,
           "markdownDescription": "Warn in the sidebar when the database container publishes its port on every network interface (`0.0.0.0`), where other machines on your network can reach it."
+        },
+        "automatedProcesses.database.sqliteFolder": {
+          "type": "string",
+          "default": "",
+          "order": 13,
+          "markdownDescription": "SQLite only: folder that relative paths in the URL start from, relative to the workspace folder (e.g. `prisma` for Prisma's `file:./dev.db`). Empty = the workspace folder."
         },
         "automatedProcesses.database.hidePatterns": {
           "type": "array",
@@ -583,6 +616,12 @@
               }
             }
           }
+        },
+        "automatedProcesses.server.includeLaunchConfigurations": {
+          "type": "boolean",
+          "default": true,
+          "order": 35,
+          "markdownDescription": "Show each `launch` configuration of `.vscode/launch.json` as a server with a debug button (browsers excluded), listed first. A server in `#automatedProcesses.servers#` whose `debugConfiguration` names one takes its place and adds its run command."
         }
       }
     }

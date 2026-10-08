@@ -28,6 +28,9 @@ function state(overrides: Partial<ViewState> = {}): ViewState {
 		],
 		hiddenCount: 0,
 		showHidden: false,
+		showAll: false,
+		moreCount: 0,
+		totalDatabases: 2,
 		scripts: [{ id: 'ci', label: 'Check CI', icon: 'checklist', steps: ['Lint', 'Harness'], inputs: [{ name: 'suite', options: ['backend', 'all'], value: 'all' }] }],
 		hasMigrations: true,
 		hasMigrationStreams: false,
@@ -137,7 +140,22 @@ suite('renderApp', () => {
 		assert.match(renderApp(state({ scripts: [], hasMigrations: false })), /No scripts yet/);
 		assert.match(renderApp(state({ dbStatus: 'error', dbError: 'connection refused', databases: [] })), /connection refused/);
 		assert.match(renderApp(state({ dbStatus: 'loading', databases: [] })), /Loading databases/);
-		assert.match(renderApp(state({ hiddenCount: 3 })), /Show hidden \(3\)/);
+		assert.match(renderApp(state({ hiddenCount: 3, showAll: true })), /Show hidden \(3\)/);
+		assert.ok(!/Show hidden/.test(renderApp(state({ hiddenCount: 3 }))), 'hidden ones only matter once all are shown');
+	});
+
+	test('the list offers the databases beyond main and current', () => {
+		assert.match(renderApp(state({ moreCount: 4 })), /data-toggle="showAll">Show all databases \(4 more\)/);
+		assert.match(renderApp(state({ showAll: true })), /data-toggle="showAll" checked>Show all databases</);
+		assert.ok(!/data-toggle="showAll"/.test(renderApp(state())), 'nothing more to show');
+	});
+
+	test('section headers open the Configure panel on the right tab', () => {
+		const html = renderApp(state());
+		assert.match(html, /data-command="configure" data-section="database"/);
+		assert.match(html, /data-command="configure" data-section="servers"/);
+		assert.match(html, /data-command="configure" data-section="scripts"/);
+		assert.match(renderApp(state({ scripts: [], hasMigrations: false })), /data-section="scripts">Add a script/);
 	});
 
 	test('the footer has the import-data toggle below the branch-change mode', () => {

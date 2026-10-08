@@ -9,6 +9,7 @@ const SESSION = { pid: 1, application: 'uvicorn', client: '172.18.0.1', user: 'a
 suite('Controller: refresh and view state', () => {
 	test('start resolves the current database, applies env and lists databases', async () => {
 		const h = harness({ databases: ['postgres', 'app', 'app_old', 'app_test_gw0'], config: testConfig({ database: { hidePatterns: ['postgres', '*_test_gw*'] }, migrations: { command: 'migrate' } }) });
+		await h.controller.setShowAll(true);
 		await h.controller.start();
 		const state = h.controller.snapshot();
 		assert.strictEqual(state.current?.name, 'app');
@@ -29,13 +30,32 @@ suite('Controller: refresh and view state', () => {
 	test('the list shows main first, then the current database, then the rest by name', async () => {
 		const h = harness({ databases: ['postgres', 'app', 'app_a', 'app_b', 'app_login', 'app_z'] });
 		await h.store.link('feature/login', 'app_login');
+		await h.controller.setShowAll(true);
 		await h.controller.start();
 		assert.deepStrictEqual(h.controller.snapshot().databases.map((db) => db.name), ['app', 'app_login', 'app_a', 'app_b', 'app_z']);
+	});
+
+	test('by default only main and the current database are listed', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_a', 'app_b', 'app_login'] });
+		await h.store.link('feature/login', 'app_login');
+		h.git.branch = 'feature/login';
+		await h.controller.start();
+		let state = h.controller.snapshot();
+		assert.deepStrictEqual(state.databases.map((db) => db.name), ['app', 'app_login']);
+		assert.strictEqual(state.moreCount, 2, 'app_a and app_b; postgres is hidden');
+		assert.strictEqual(state.totalDatabases, 5);
+		assert.strictEqual(state.showAll, false);
+
+		await h.controller.setShowAll(true);
+		state = h.controller.snapshot();
+		assert.deepStrictEqual(state.databases.map((db) => db.name), ['app', 'app_login', 'app_a', 'app_b']);
+		assert.strictEqual(state.moreCount, 0);
 	});
 
 	test('showing hidden databases is remembered', async () => {
 		const h = harness({ databases: ['postgres', 'app'] });
 		await h.controller.start();
+		await h.controller.setShowAll(true);
 		await h.controller.setShowHidden(true);
 		assert.deepStrictEqual(h.controller.snapshot().databases.map((db) => db.name), ['app', 'postgres']);
 	});

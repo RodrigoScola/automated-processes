@@ -25,13 +25,14 @@ const esbuildProblemMatcherPlugin = {
 	},
 };
 
-/** Copies the sidebar's static files (styles and the codicon font) next to its bundle. */
+/** Copies the webviews' static files (styles and the codicon font) next to their bundles. */
 function copyWebviewAssets() {
 	const target = path.join(__dirname, 'dist', 'webview');
 	fs.mkdirSync(target, { recursive: true });
 	const codicons = path.join(__dirname, 'node_modules', '@vscode', 'codicons', 'dist');
 	for (const [from, name] of [
 		[path.join(__dirname, 'src', 'webview', 'styles.css'), 'styles.css'],
+		[path.join(__dirname, 'src', 'webview', 'panel.css'), 'panel.css'],
 		[path.join(codicons, 'codicon.css'), 'codicon.css'],
 		[path.join(codicons, 'codicon.ttf'), 'codicon.ttf'],
 	]) {
@@ -60,7 +61,7 @@ async function main() {
 		],
 	});
 	const webview = await esbuild.context({
-		entryPoints: ['src/webview/main.ts'],
+		entryPoints: { main: 'src/webview/main.ts', panel: 'src/webview/panel.ts' },
 		bundle: true,
 		format: 'iife',
 		minify: production,
@@ -68,7 +69,7 @@ async function main() {
 		sourcesContent: false,
 		platform: 'browser',
 		target: 'es2022',
-		outfile: 'dist/webview/main.js',
+		outdir: 'dist/webview',
 		logLevel: 'silent',
 		plugins: [esbuildProblemMatcherPlugin],
 	});

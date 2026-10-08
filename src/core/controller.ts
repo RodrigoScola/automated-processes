@@ -58,6 +58,7 @@ interface Ready {
 const MAINTENANCE_DATABASES = ['postgres', 'template0', 'template1'];
 const PREF_INPUTS = 'automatedProcesses.inputs';
 const PREF_SHOW_HIDDEN = 'automatedProcesses.showHidden';
+const PREF_SHOW_ALL = 'automatedProcesses.showAllDatabases';
 const MIGRATIONS_SCRIPT_ID = '__migrations';
 
 export class Controller {
@@ -214,6 +215,7 @@ export class Controller {
 		const data = this.deps.store.data();
 		const branch = this.deps.git.currentBranch();
 		const showHidden = this.deps.prefs.get<boolean>(PREF_SHOW_HIDDEN) ?? false;
+		const showAll = this.deps.prefs.get<boolean>(PREF_SHOW_ALL) ?? false;
 		const mainName = this.mainName;
 		const current = this.current;
 
@@ -243,6 +245,9 @@ export class Controller {
 			}
 		}
 		const meta = current ? data.meta[current.database] ?? {} : {};
+		// By default only the two that matter are listed: main and the current one.
+		const visible = showHidden ? all : all.filter((db) => !db.hidden);
+		const listed = showAll ? visible : visible.filter((db) => db.isMain || db.isCurrent);
 		const inputs = this.deps.prefs.get<Record<string, Record<string, string>>>(PREF_INPUTS) ?? {};
 
 		return {
@@ -266,9 +271,12 @@ export class Controller {
 				: undefined,
 			dbStatus: this.dbStatus,
 			dbError: this.dbError,
-			databases: showHidden ? all : all.filter((db) => !db.hidden),
+			databases: listed,
 			hiddenCount: all.filter((db) => db.hidden).length,
 			showHidden,
+			showAll,
+			moreCount: visible.length - listed.length,
+			totalDatabases: all.length,
 			busy: this.busy,
 			scripts: config.scripts.map((script) => ({
 				id: script.id,
@@ -1001,6 +1009,11 @@ export class Controller {
 		const inputs = this.deps.prefs.get<Record<string, Record<string, string>>>(PREF_INPUTS) ?? {};
 		inputs[scriptId] = { ...inputs[scriptId], [name]: value };
 		await this.deps.prefs.update(PREF_INPUTS, inputs);
+		this.changed();
+	}
+
+	async setShowAll(value: boolean): Promise<void> {
+		await this.deps.prefs.update(PREF_SHOW_ALL, value);
 		this.changed();
 	}
 

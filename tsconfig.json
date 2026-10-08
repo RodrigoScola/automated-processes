@@ -15,6 +15,6 @@
 		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
 	},
 	"include": ["src"],
-	/* The webview entry point needs DOM types; it's checked with src/webview/tsconfig.json. */
-	"exclude": ["src/webview/main.ts"]
+	/* The webview entry points need DOM types; they're checked with src/webview/tsconfig.json. */
+	"exclude": ["src/webview/main.ts", "src/webview/panel.ts"]
 }
