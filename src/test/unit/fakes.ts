@@ -1,3 +1,5 @@
+import * as os from 'os';
+import * as path from 'path';
 import { Config, ConfigResult, DEFAULT_CONFIG } from '../../core/config';
 import { Controller } from '../../core/controller';
 import { EnvMap } from '../../core/envFile';
@@ -55,6 +57,20 @@ export class FakeUi implements Ui {
 	}
 	async withProgress<T>(_title: string, task: () => Promise<T>) {
 		return task();
+	}
+	saveAnswer: (defaultPath: string) => string | undefined = (defaultPath) => defaultPath;
+	openAnswer: (folder: string) => string | undefined = () => undefined;
+	readonly revealed: string[] = [];
+	async saveFile(title: string, defaultPath: string) {
+		this.log.push({ kind: 'save', message: title, detail: defaultPath });
+		return this.saveAnswer(defaultPath);
+	}
+	async openFile(title: string, folder: string) {
+		this.log.push({ kind: 'open', message: title, detail: folder });
+		return this.openAnswer(folder);
+	}
+	revealFile(file: string) {
+		this.revealed.push(file);
 	}
 
 	messages(kind: string): string[] {
@@ -187,6 +203,17 @@ export class FakeEngine implements DatabaseEngine {
 	async exposedAddresses() {
 		return [...this.exposed];
 	}
+	readonly fileExtension = '.dump';
+	failRestore: Error | undefined;
+	async dumpToFile(database: string, file: string) {
+		this.calls.push(`dumpToFile ${database} -> ${file}`);
+	}
+	async restoreFromFile(file: string, database: string) {
+		this.calls.push(`restoreFromFile ${file} -> ${database}`);
+		if (this.failRestore) {
+			throw this.failRestore;
+		}
+	}
 
 	private assertMissing(database: string) {
 		if (this.databases.has(database)) {
@@ -301,6 +328,9 @@ export function testConfig(overrides: ConfigOverrides = {}): Config {
 	};
 }
 
+/** Default backup folder in tests (created on first backup). */
+export const BACKUP_FOLDER = path.join(os.tmpdir(), 'ap-test-backups');
+
 export const MAIN_URL = 'postgresql+asyncpg://app:secret@127.0.0.1:5433/app';
 
 export interface Harness {
@@ -362,6 +392,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 			return h.engine;
 		},
 		processEnv: { PATH: '/bin' },
+		backupFolder: () => BACKUP_FOLDER,
 		onDidChange: () => h.changes++,
 		now: () => Date.parse('2026-10-01T12:00:00Z'),
 	});

@@ -1,23 +1,29 @@
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Config, ScriptDefinition, ServerDefinition } from '../core/config';
+import { detectDefaults, nodeProjectFiles, Suggestion } from '../core/detect';
 import {
 	DATABASE_KEYS,
 	databaseValues,
 	deleteScript,
 	deleteServer,
+	migrationValues,
+	NO_MIGRATIONS,
 	moveScript,
 	panelState,
+	panelSuggestions,
 	SCRIPT_KEYS,
 	SERVER_KEYS,
 	serverValues,
+	suggestionValues,
 	upsertScript,
 	upsertServer,
 	urlProblem,
 } from '../core/editor';
 import { mainDatabase, ProjectEnv } from '../core/environment';
-import { PanelHostMessage, PanelMessage, PanelNotice, PanelState, PanelTab } from '../shared/panelProtocol';
+import { PanelHostMessage, PanelMessage, PanelNotice, PanelState, PanelTab, Scope } from '../shared/panelProtocol';
 import { Overrides } from './overrides';
 import { launchServerConfigurations, readSettings } from './settings';
 
@@ -33,20 +39,33 @@ export interface ConfigureDeps {
 }
 
 /**
- * The Configure editor tab: Database, Servers and Scripts, edited with forms. Changes are stored
- * in the extension (see `Overrides`) and apply right away.
+ * The Configure editor tab: Database, Servers and Scripts (with migrations), edited with forms.
+ * Changes are stored in the extension (see `Overrides`), for this workspace or for all of them,
+ * and apply right away.
  */
 export class ConfigurePanel implements vscode.Disposable {
 	private panel: vscode.WebviewPanel | undefined;
+	/** What the last "Add defaults" found, until it's added. */
+	private suggestions: Suggestion[] = [];
+	/** Add defaults to run once a just-opened panel is ready. */
+	private iconNames: string[] | undefined;
+	private pendingDetect: 'servers' | 'scripts' | undefined;
 
 	constructor(private readonly deps: ConfigureDeps) {}
 
-	show(tab: PanelTab = 'database'): void {
+	/** Opens (or brings back) the panel on `tab`; `detect` also runs Add defaults there. */
+	show(tab: PanelTab = 'database', detect = false): void {
+		const detectTab = detect && tab !== 'database' ? tab : undefined;
 		if (this.panel) {
 			this.panel.reveal();
 			this.post({ type: 'show', tab });
+			if (detectTab) {
+				this.detect(detectTab);
+			}
 			return;
 		}
+		// A new panel can't receive messages until its script has loaded; see 'ready'.
+		this.pendingDetect = detectTab;
 		const assets = vscode.Uri.joinPath(this.deps.extensionUri, 'dist', 'webview');
 		const panel = vscode.window.createWebviewPanel('automatedProcesses.configure', 'Automated Processes: Configure', vscode.ViewColumn.Active, {
 			enableScripts: true,
@@ -73,25 +92,38 @@ export class ConfigurePanel implements vscode.Disposable {
 
 	state(): PanelState {
 		const { folder, overrides } = this.deps;
-		const unmerged = readSettings(folder, overrides, { mergeLaunch: false });
-		const merged = readSettings(folder, overrides);
+		const config = this.configured();
 		let mainUrl: string | undefined;
 		if (folder) {
 			try {
-				mainUrl = mainDatabase(unmerged.config, this.deps.readEnv(folder.uri.fsPath, unmerged.config)).url;
+				mainUrl = mainDatabase(config, this.deps.readEnv(folder.uri.fsPath, config)).url;
 			} catch {
-				mainUrl = unmerged.config.database.url || undefined;
+				mainUrl = config.database.url || undefined;
 			}
 		}
 		return panelState({
-			config: unmerged.config,
-			servers: merged.config.servers,
+			config,
+			servers: readSettings(folder, overrides).config.servers,
 			launchConfigurations: launchServerConfigurations(folder).map((item) => item.name),
-			stored: overrides.stored(),
+			stored: { local: overrides.stored('local'), global: overrides.stored('global') },
 			mainUrl,
-			urlStored: overrides.hasUrl,
-			problems: unmerged.problems,
+			urlScope: overrides.urlScope(),
+			problems: readSettings(folder, overrides, { mergeLaunch: false }).problems,
+			icons: this.icons(),
 		});
+	}
+
+	/** Codicon names, read once from the bundled codicon.css (`.codicon-NAME:before`). */
+	private icons(): string[] {
+		if (!this.iconNames) {
+			try {
+				const css = fs.readFileSync(path.join(this.deps.extensionUri.fsPath, 'dist', 'webview', 'codicon.css'), 'utf8');
+				this.iconNames = [...new Set([...css.matchAll(/\.codicon-([a-z0-9-]+):before/g)].map((match) => match[1]))].sort();
+			} catch {
+				this.iconNames = [];
+			}
+		}
+		return this.iconNames;
 	}
 
 	private async handle(message: PanelMessage): Promise<void> {
@@ -99,53 +131,86 @@ export class ConfigurePanel implements vscode.Disposable {
 			switch (message.type) {
 				case 'ready':
 					this.update();
+					if (this.pendingDetect) {
+						this.detect(this.pendingDetect);
+						this.pendingDetect = undefined;
+					}
 					return;
 				case 'saveDatabase':
-					return await this.saveDatabase(message.form);
+					return await this.saveDatabase(message.form, message.scope);
 				case 'testConnection':
 					await this.deps.refresh();
 					return this.notice({ tab: 'database', ...toNotice(this.deps.connectionStatus()) });
 				case 'saveServer':
-					return await this.saveServers((servers) => upsertServer(servers, message.server, message.originalId), `Saved ${message.server.label.trim()}.`);
+					return await this.saveServers((servers) => upsertServer(servers, message.server, message.originalId), message.scope, `Saved ${message.server.label.trim()}.`);
+				case 'addLaunch':
+					return await this.saveServers(
+						(servers) => upsertServer(servers, { label: message.name, command: '', debugConfiguration: message.name, restartOnDatabaseChange: true, cwd: '', runOnStartup: false }),
+						message.scope,
+						`Added ${message.name}. Edit it to give it a run command too.`,
+					);
 				case 'deleteServer': {
 					const server = this.configured().servers.find((item) => item.id === message.id);
 					if (server && await confirm(`Delete the server "${server.label}"?`, 'Its run and debug buttons go away. launch.json isn\'t changed.')) {
-						await this.saveServers((servers) => deleteServer(servers, message.id), `Deleted ${server.label}.`);
+						await this.saveServers((servers) => deleteServer(servers, message.id), message.scope, `Deleted ${server.label}.`);
 					}
 					return;
 				}
 				case 'setIncludeLaunch':
-					await this.deps.overrides.set({ 'server.includeLaunchConfigurations': message.value });
+					await this.deps.overrides.set({ 'server.includeLaunchConfigurations': message.value }, message.scope);
 					return await this.changed();
 				case 'saveScript':
-					return await this.saveScripts((scripts) => upsertScript(scripts, message.script, message.originalId), `Saved ${message.script.label.trim()}.`);
+					return await this.saveScripts((scripts) => upsertScript(scripts, message.script, message.originalId), message.scope, `Saved ${message.script.label.trim()}.`);
 				case 'deleteScript': {
 					const script = this.configured().scripts.find((item) => item.id === message.id);
 					if (script && await confirm(`Delete the script "${script.label}"?`, 'Its button goes away from the sidebar.')) {
-						await this.saveScripts((scripts) => deleteScript(scripts, message.id), `Deleted ${script.label}.`);
+						await this.saveScripts((scripts) => deleteScript(scripts, message.id), message.scope, `Deleted ${script.label}.`);
 					}
 					return;
 				}
 				case 'moveScript':
-					return await this.saveScripts((scripts) => moveScript(scripts, message.id, message.delta));
+					return await this.saveScripts((scripts) => moveScript(scripts, message.id, message.delta), message.scope);
+				case 'removeMigrations':
+					if (await confirm('Remove the migrations?', 'Run Migrations and Sync Migrations go away from the sidebar. The command and histories saved here are cleared.')) {
+						await this.store(NO_MIGRATIONS, message.scope);
+						this.notice({ tab: 'scripts', area: 'migrations', kind: 'ok', message: 'Removed the migrations.' }, true);
+					}
+					return;
+				case 'saveMigrations': {
+					const values = migrationValues(message.migrations);
+					if (typeof values === 'string') {
+						return this.notice({ tab: 'scripts', area: 'migrations', kind: 'error', message: values });
+					}
+					await this.store(values, message.scope);
+					return this.notice({ tab: 'scripts', area: 'migrations', kind: 'ok', message: 'Saved the migrations.' }, true);
+				}
+				case 'detect':
+					return this.detect(message.tab);
+				case 'addSuggestions': {
+					await this.store(suggestionValues(this.suggestions, message.ids, this.configured(), message.tab), message.scope);
+					this.post({ type: 'suggestions', tab: message.tab, suggestions: [] });
+					return this.notice({ tab: message.tab, kind: 'ok', message: `Added ${message.ids.length} item${message.ids.length === 1 ? '' : 's'}.` }, true);
+				}
 				case 'reset':
 					return await this.reset(message.tab);
 				case 'open':
 					return await this.open(message.target);
 			}
 		} catch (error) {
-			const tab: PanelTab = message.type.toLowerCase().includes('script') ? 'scripts' : message.type.toLowerCase().includes('server') ? 'servers' : 'database';
+			const type = message.type.toLowerCase();
+			const tab: PanelTab = /script|migration/.test(type) ? 'scripts' : /server|launch/.test(type) ? 'servers' : 'database';
 			this.notice({ tab, kind: 'error', message: error instanceof Error ? error.message : String(error) });
 		}
 	}
 
+	/** Effective settings with the panel's values, servers not merged with launch.json. */
 	private configured(): Config {
 		return readSettings(this.deps.folder, this.deps.overrides, { mergeLaunch: false }).config;
 	}
 
-	private async saveDatabase(form: Extract<PanelMessage, { type: 'saveDatabase' }>['form']): Promise<void> {
-		const current = this.configured();
-		const result = databaseValues(form, current);
+	private async saveDatabase(form: Extract<PanelMessage, { type: 'saveDatabase' }>['form'], scope: Scope): Promise<void> {
+		const { overrides } = this.deps;
+		const result = databaseValues(form, this.configured());
 		if ('problem' in result) {
 			return this.notice({ tab: 'database', kind: 'error', message: result.problem });
 		}
@@ -155,53 +220,76 @@ export class ConfigurePanel implements vscode.Disposable {
 				if (problem) {
 					return this.notice({ tab: 'database', kind: 'error', message: problem });
 				}
-			} else if (!this.deps.overrides.hasUrl) {
+			} else if (!overrides.urlScope()) {
 				return this.notice({ tab: 'database', kind: 'error', message: 'Enter the connection URL.' });
 			}
 		}
-		await this.deps.overrides.set(result.values);
+		await overrides.set(result.values, scope);
 		if (form.source === 'envFile') {
-			await this.deps.overrides.setUrl(undefined);
+			await overrides.clearUrl();
 		} else if (form.url !== undefined) {
-			await this.deps.overrides.setUrl(form.url.trim());
+			await overrides.setUrl(form.url.trim(), scope);
+		} else if (overrides.urlScope() !== scope) {
+			// Same URL, moved to the other layer.
+			const url = overrides.values()['database.url'] as string;
+			await overrides.clearUrl();
+			await overrides.setUrl(url, scope);
 		}
-		await this.deps.refresh();
-		this.update();
+		await this.changed();
 		const status = this.deps.connectionStatus();
-		this.notice({ tab: 'database', kind: status.ok ? 'ok' : 'error', message: `Saved. ${status.message}` }, true);
+		this.notice({ tab: 'database', kind: status.ok ? 'ok' : 'error', message: `Saved${scope === 'global' ? ' for all workspaces' : ''}. ${status.message}` }, true);
 	}
 
-	private async saveServers(change: (servers: ServerDefinition[]) => ServerDefinition[] | string, done: string): Promise<void> {
+	private async saveServers(change: (servers: ServerDefinition[]) => ServerDefinition[] | string, scope: Scope, done: string): Promise<void> {
 		const result = change(this.configured().servers);
 		if (typeof result === 'string') {
 			return this.notice({ tab: 'servers', kind: 'error', message: result });
 		}
-		await this.deps.overrides.set(serverValues(result));
-		await this.changed();
+		await this.store(serverValues(result), scope);
 		this.notice({ tab: 'servers', kind: 'ok', message: done }, true);
 	}
 
-	private async saveScripts(change: (scripts: ScriptDefinition[]) => ScriptDefinition[] | string, done?: string): Promise<void> {
+	private async saveScripts(change: (scripts: ScriptDefinition[]) => ScriptDefinition[] | string, scope: Scope, done?: string): Promise<void> {
 		const result = change(this.configured().scripts);
 		if (typeof result === 'string') {
 			return this.notice({ tab: 'scripts', kind: 'error', message: result });
 		}
-		await this.deps.overrides.set({ scripts: result });
-		await this.changed();
+		await this.store({ scripts: result }, scope);
 		if (done) {
 			this.notice({ tab: 'scripts', kind: 'ok', message: done }, true);
 		}
 	}
 
+	private detect(tab: 'servers' | 'scripts'): void {
+		const folder = this.deps.folder;
+		if (!folder) {
+			return this.notice({ tab, kind: 'error', message: 'Open a folder first.' });
+		}
+		const launch = launchServerConfigurations(folder).map((item) => item.name);
+		this.suggestions = detectDefaults(nodeProjectFiles(folder.uri.fsPath), launch);
+		const config = this.configured();
+		const found = panelSuggestions(this.suggestions, config, readSettings(folder, this.deps.overrides).config.servers, tab);
+		this.post({ type: 'suggestions', tab, suggestions: found });
+		if (found.length === 0) {
+			this.notice({
+				tab,
+				kind: 'error',
+				message: tab === 'servers'
+					? 'Found nothing to run: no dev/start script in a package.json, no Django, FastAPI or Flask app, and no launch.json configuration.'
+					: 'Found nothing: no package.json or Python project in the workspace or its direct subfolders.',
+			});
+		}
+	}
+
 	private async reset(tab: PanelTab): Promise<void> {
 		const keys = tab === 'database' ? DATABASE_KEYS : tab === 'servers' ? SERVER_KEYS : SCRIPT_KEYS;
-		const what = tab === 'database' ? 'the database connection (including an entered URL)' : `the ${tab}`;
-		if (!await confirm(`Use settings.json for ${tab}?`, `Forgets ${what} saved here, so the automatedProcesses.* settings apply again.`)) {
+		const what = tab === 'database' ? 'the database connection (including an entered URL)' : tab === 'scripts' ? 'the scripts and migrations' : 'the servers';
+		if (!await confirm(`Use settings.json for ${tab}?`, `Forgets ${what} saved here, for this workspace and for all workspaces, so the automatedProcesses.* settings apply again.`)) {
 			return;
 		}
 		await this.deps.overrides.clear(keys);
 		if (tab === 'database') {
-			await this.deps.overrides.setUrl(undefined);
+			await this.deps.overrides.clearUrl();
 		}
 		await this.changed();
 		this.notice({ tab, kind: 'ok', message: 'Now using settings.json.' }, true);
@@ -225,6 +313,11 @@ export class ConfigurePanel implements vscode.Disposable {
 		}
 	}
 
+	private async store(values: Record<string, unknown>, scope: Scope): Promise<void> {
+		await this.deps.overrides.set(values, scope);
+		await this.changed();
+	}
+
 	private async changed(): Promise<void> {
 		await this.deps.refresh();
 		this.update();
@@ -244,7 +337,7 @@ function toNotice(status: { ok: boolean; message: string }): Pick<PanelNotice, '
 }
 
 async function confirm(message: string, detail: string): Promise<boolean> {
-	const label = message.startsWith('Delete') ? 'Delete' : 'Continue';
+	const label = message.startsWith('Delete') ? 'Delete' : message.startsWith('Remove') ? 'Remove' : 'Continue';
 	return (await vscode.window.showWarningMessage(message, { modal: true, detail }, label)) === label;
 }
 

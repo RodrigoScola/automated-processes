@@ -1,4 +1,4 @@
-import { pipeProcesses, ProcessError, ProcessResult, ProcessSpec, runProcess } from './process';
+import { pipeProcesses, ProcessError, ProcessResult, ProcessSpec, runFromFile, runProcess, runToFile } from './process';
 
 // ── Engine interface ─────────────────────────────────────────────────────────
 
@@ -27,6 +27,12 @@ export interface DatabaseEngine {
 	drop(database: string): Promise<void>;
 	/** Addresses the Docker database container publishes on every network interface (empty outside Docker). */
 	exposedAddresses(): Promise<string[]>;
+	/** Extension of the files `dumpToFile` writes, e.g. `.dump`. */
+	readonly fileExtension: string;
+	/** Writes a full copy of `database` (schema and data) to `file`. */
+	dumpToFile(database: string, file: string): Promise<void>;
+	/** Loads a file `dumpToFile` wrote into `database`, which must exist and be empty. */
+	restoreFromFile(file: string, database: string): Promise<void>;
 }
 
 // ── SQL helpers ──────────────────────────────────────────────────────────────
@@ -149,6 +155,13 @@ export function parseExposedAddresses(stdout: string): string[] {
 
 export type ProcessRunner = (spec: ProcessSpec) => Promise<ProcessResult>;
 export type ProcessPiper = (from: ProcessSpec, to: ProcessSpec) => Promise<{ from: ProcessResult; to: ProcessResult }>;
+/** Runs a command with its output written to, or its input read from, a file. */
+export interface FileRunner {
+	toFile(spec: ProcessSpec, file: string): Promise<ProcessResult>;
+	fromFile(spec: ProcessSpec, file: string): Promise<ProcessResult>;
+}
+
+const NODE_FILE_RUNNER: FileRunner = { toFile: runToFile, fromFile: runFromFile };
 
 const MAINTENANCE_DATABASE = 'postgres';
 
@@ -157,6 +170,7 @@ export class PostgresEngine implements DatabaseEngine {
 		readonly settings: ClientSettings,
 		private readonly run: ProcessRunner = runProcess,
 		private readonly pipe: ProcessPiper = pipeProcesses,
+		private readonly files: FileRunner = NODE_FILE_RUNNER,
 	) {}
 
 	async query(sql: string, database = MAINTENANCE_DATABASE): Promise<string[][]> {
@@ -218,6 +232,23 @@ export class PostgresEngine implements DatabaseEngine {
 
 	async drop(database: string): Promise<void> {
 		await this.query(SQL.drop(database));
+	}
+
+	readonly fileExtension = '.dump';
+
+	/** pg_dump's custom format, streamed out of the tools (or the container) into the file. */
+	async dumpToFile(database: string, file: string): Promise<void> {
+		const result = await this.files.toFile(clientSpec(this.settings, 'pg_dump', ['--format=custom', '--no-password', '-d', database]), file);
+		if (result.code !== 0) {
+			throw new ProcessError(describeFailure('pg_dump', result), result);
+		}
+	}
+
+	async restoreFromFile(file: string, database: string): Promise<void> {
+		const result = await this.files.fromFile(clientSpec(this.settings, 'pg_restore', ['--no-password', '--exit-on-error', '--no-owner', '-d', database]), file);
+		if (result.code !== 0) {
+			throw new ProcessError(describeFailure('pg_restore', result), result);
+		}
 	}
 
 	async exposedAddresses(): Promise<string[]> {

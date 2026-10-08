@@ -409,6 +409,34 @@ body {
 	font-size: 28px !important;
 }
 
+/* A view with nothing in it yet: what it's for, and buttons to fill it. */
+.empty-state {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 14px 8px 8px;
+	text-align: center;
+	color: var(--ap-muted);
+}
+
+.empty-state p {
+	margin: 0;
+	max-width: 280px;
+	line-height: 1.45;
+}
+
+.empty-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 6px;
+}
+
+.empty-actions:empty {
+	display: none;
+}
+
 /* ── Footer ───────────────────────────────────────────────────────────── */
 
 .footer {

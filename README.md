@@ -19,25 +19,48 @@ project-specific is a setting, edited in the **Configure** panel or as `automate
 
 The design and decisions are in [PLAN.md](PLAN.md).
 
+## Sidebar
+
+Four views, each with its own title bar buttons: **Database**, **Servers** (run, debug, restart,
+stop), **Scripts** (with Run Migrations and Sync Migrations) and **Settings** (the
+on-branch-change and restart options; collapsed at the bottom). Drag the dividers to resize them,
+collapse the ones you don't need, or drag them to reorder.
+
+Scripts and servers run in background terminals: the terminal panel and focus stay where they
+are. Their **output** links (or `revealTerminal`) show them.
+
+The Database view lists only the main and the current database; **Show all databases** lists the
+rest.
+
 ## Configure panel
 
-The gear in the sidebar (or **Automated Processes: Configure Database, Servers and Scripts**) opens
-an editor tab with three tabs:
+The `+` and gear buttons in the sidebar (or **Automated Processes: Configure Database, Servers and
+Scripts**) open an editor tab with three tabs:
 
 - **Database:** the engine (PostgreSQL, SQLite or detect from the URL), where the connection URL
   comes from (the env file, or typed in; a typed URL is kept in VS Code's secret storage), where
   the PostgreSQL tools run (this machine, a Docker container or a Compose service), and the main
   branches. **Test connection** checks it.
-- **Servers:** add, edit and delete servers (name, run command, launch.json configuration to
-  debug with, restart on database change). launch.json configurations show up by themselves;
-  editing one adds a run command to it.
-- **Scripts:** add, edit, reorder and delete scripts and their steps, variables and dropdowns.
+- **Servers:** add, edit and delete servers (name, run command, folder, launch.json configuration
+  to debug with, restart on database change). The launch.json list has **Add as server** for each
+  configuration.
+- **Scripts:** add, edit, reorder and delete scripts and their steps, folder, variables and
+  dropdowns. Below them, **Migrations**: the Run Migrations command and folder, when it runs, and
+  the histories Sync Migrations reverts.
 
-What you save there is kept in the extension's storage for this workspace, on your machine, and
-overrides the same keys from `settings.json`. Nothing in the repository changes. Each tab has
-**Use settings.json instead** to go back.
+**Add defaults** (Servers and Scripts) looks at the project and its direct subfolders and offers
+what it finds, ticked unless it's already there:
 
-The sidebar lists only the main and the current database; **Show all databases** lists the rest.
+| Found | Servers | Scripts | Migrations |
+|---|---|---|---|
+| `package.json` | `dev` / `start` script (a Vite, Next, React… app is a frontend: not restarted on database change) | install (npm, pnpm, yarn or bun), Check (lint, typecheck, test, build) | `migrate` script, or Prisma |
+| Python (`pyproject.toml`, `requirements.txt`) | Django `runserver`, FastAPI (`uvicorn`) or Flask app found in the code | install (uv, poetry, pipenv or pip), Check (ruff, mypy/pyright, pytest) | Django `migrate`, Alembic (plus its Sync Migrations history) |
+| `launch.json` | each `launch` configuration | | |
+
+**Save for** at the top of each tab picks where saving goes: **This workspace** or **All
+workspaces** (every project that doesn't have its own). Both are kept in the extension's storage on
+your machine and override the same keys from `settings.json`; nothing in the repository changes.
+**use settings.json** goes back.
 
 ## Requirements
 
@@ -60,6 +83,7 @@ The sidebar lists only the main and the current database; **Show all databases**
 | `applyToTerminals` | `true` | Current database in new terminals |
 | `applyToDebugSessions` | `true` | Current database in debug sessions of this folder (overrides the launch configuration's `envFile`) |
 | `echoCommands` | `true` | Print each command, placeholders filled in, at the top of its terminal |
+| `revealTerminal` | `never` | `never` / `onFailure` / `always`: when a script's or server's terminal comes into view (never focused) |
 | `database.engine` | `auto` | `auto` (SQLite for SQLite URLs, else PostgreSQL) / `postgres` / `sqlite` |
 | `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the current database; the first defines main |
 | `database.sqliteFolder` | `""` | SQLite: folder relative paths start from (e.g. `prisma`); empty = workspace |
@@ -76,17 +100,18 @@ The sidebar lists only the main and the current database; **Show all databases**
 | `testDatabase.urlVariables` | `[]` | Variables pointed at the per-branch test database |
 | `testDatabase.nameSuffix` | `_test` | Test database = branch database + suffix |
 | `migrations.command` | `""` | Command that applies migrations |
+| `migrations.cwd` | `""` | Folder it runs in, relative to the workspace |
 | `migrations.onBranchChange` | `ask` | `off` / `ask` / `always` |
 | `migrations.afterCopy` | `true` | Run migrations after **Export Data** |
 | `migrations.streams` | `[]` | Migration histories for **Sync Migrations** (see below) |
-| `servers` | `[]` | Servers in the sidebar (`label`, `command`, `debugConfiguration`, `restartOnDatabaseChange`), each with run, debug, restart and stop |
+| `servers` | `[]` | Servers in the sidebar (`label`, `command`, `cwd`, `debugConfiguration`, `restartOnDatabaseChange`), each with run, debug, restart and stop |
 | `server.command` | `""` | Single-server shortcut, used only when `servers` is empty |
 | `onGitUpdate.script` | `""` | Script to run when the branch gets new commits (pull, merge, rebase) |
 | `onGitUpdate.mode` | `always` | `always` / `ask` / `off` |
 | `onGitUpdate.whenFilesChange` | `[]` | Only when these files changed (e.g. `uv.lock`, `package-lock.json`) |
 | `onGitUpdate.skipMainBranches` | `false` | Don't run it on the main branches |
 | `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
-| `server.includeLaunchConfigurations` | `true` | launch.json `launch` configurations are servers too (listed first) |
+| `server.includeLaunchConfigurations` | `false` | Show every launch.json `launch` configuration as a server without adding it |
 | `scripts` | `[]` | Sidebar script buttons |
 
 Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`, `${db.mainUrl}`,

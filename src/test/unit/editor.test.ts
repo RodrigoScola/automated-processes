@@ -2,7 +2,11 @@ import * as assert from 'assert';
 import { DEFAULT_CONFIG, mergeLaunchServers, readConfig, ScriptDefinition, ServerDefinition } from '../../core/config';
 import { databaseValues, deleteScript, maskUrl, moveScript, panelState, serverValues, upsertScript, upsertServer, urlProblem } from '../../core/editor';
 import { PanelDatabaseForm, PanelState } from '../../shared/panelProtocol';
-import { databaseDraft, databaseForm, draftToScript, renderPanel, scriptDraft } from '../../webview/panelRender';
+import { databaseDraft, databaseForm, draftToScript, initialScope, migrationsDraft, PanelUi, renderPanel, scriptDraft } from '../../webview/panelRender';
+
+function uiFor(state: PanelState, tab: PanelUi['tab']): PanelUi {
+	return { tab, scope: initialScope(state), db: databaseDraft(state), dbDirty: false, migrations: migrationsDraft(state), migrationsDirty: false, iconSearch: '' };
+}
 
 const setup: ScriptDefinition = {
 	id: 'setup', label: 'Setup', icon: 'tools', env: { A: '1' },
@@ -66,15 +70,16 @@ suite('editor: scripts', () => {
 
 suite('editor: servers', () => {
 	test('adds, edits and validates servers', () => {
-		const added = upsertServer([backend], { label: 'Worker', command: 'npm run worker', debugConfiguration: '', restartOnDatabaseChange: true }) as ServerDefinition[];
+		const added = upsertServer([backend], { label: 'Worker', command: 'npm run worker', debugConfiguration: '', restartOnDatabaseChange: true, cwd: './worker/', runOnStartup: false }) as ServerDefinition[];
 		assert.deepStrictEqual(added.map((server) => server.id), ['backend', 'worker']);
-		const edited = upsertServer(added, { label: 'API', command: 'serve', debugConfiguration: 'Backend', restartOnDatabaseChange: false }, 'backend') as ServerDefinition[];
+		assert.strictEqual(added[1].cwd, 'worker', 'folders are cleaned up');
+		const edited = upsertServer(added, { label: 'API', command: 'serve', debugConfiguration: 'Backend', restartOnDatabaseChange: false, cwd: '', runOnStartup: false }, 'backend') as ServerDefinition[];
 		assert.deepStrictEqual(edited[0], { id: 'backend', label: 'API', command: 'serve', debugConfiguration: 'Backend', restartOnDatabaseChange: false });
-		assert.match(upsertServer([], { label: 'X', command: '', debugConfiguration: '', restartOnDatabaseChange: true }) as string, /run command/);
+		assert.match(upsertServer([], { label: 'X', command: '', debugConfiguration: '', restartOnDatabaseChange: true, cwd: '', runOnStartup: false }) as string, /run command/);
 	});
 
 	test('giving a launch.json-only server a command adds a configured one that merges with it', () => {
-		const saved = upsertServer([], { label: 'Tests', command: 'npm test', debugConfiguration: 'Tests', restartOnDatabaseChange: true }) as ServerDefinition[];
+		const saved = upsertServer([], { label: 'Tests', command: 'npm test', debugConfiguration: 'Tests', restartOnDatabaseChange: true, cwd: '', runOnStartup: false }) as ServerDefinition[];
 		const merged = mergeLaunchServers(saved, [{ name: 'Tests' }]);
 		assert.deepStrictEqual(merged.map((server) => [server.label, server.source, server.command]), [['Tests', 'both', 'npm test']]);
 	});
@@ -128,16 +133,17 @@ suite('Configure panel', () => {
 			config: { ...DEFAULT_CONFIG, scripts: [setup], servers: [backend] },
 			servers: mergeLaunchServers([backend], [{ name: 'Tests' }, { name: 'Backend' }]),
 			launchConfigurations: ['Tests', 'Backend'],
-			stored: { scripts: [setup] },
+			stored: { local: { scripts: [setup] }, global: { 'database.engine': 'postgres', servers: [] } },
 			mainUrl: 'postgresql://app:pw@localhost:5432/app',
-			urlStored: true,
+			urlScope: 'global',
 			problems: [],
 		});
 	}
 
 	test('panel state says what is stored and never sends the password', () => {
 		const panel = state();
-		assert.deepStrictEqual(panel.stored, { database: true, servers: false, scripts: true });
+		assert.deepStrictEqual(panel.stored, { database: 'global', servers: 'global', scripts: 'local' });
+		assert.deepStrictEqual(panel.launchConfigurations, [{ name: 'Tests', added: false }, { name: 'Backend', added: true }]);
 		assert.strictEqual(panel.database.source, 'url');
 		assert.strictEqual(panel.database.detectedEngine, 'postgres');
 		assert.ok(!JSON.stringify(panel).includes(':pw@'));
@@ -159,7 +165,7 @@ suite('Configure panel', () => {
 
 	test('renders each tab', () => {
 		const panel = state();
-		const ui = { tab: 'database' as const, db: databaseDraft(panel), dbDirty: false };
+		const ui = uiFor(panel, 'database');
 		const database = renderPanel(panel, ui);
 		assert.match(database, /type="password" data-bind="db.url"/);
 		assert.match(database, /Saved: <code>postgresql:\/\/app:•••@localhost:5432\/app<\/code>/);
@@ -178,7 +184,7 @@ suite('Configure panel', () => {
 	test('escapes everything users typed', () => {
 		const panel = state();
 		panel.scripts = [{ ...setup, label: '<img src=x onerror=alert(1)>' }];
-		const html = renderPanel(panel, { tab: 'scripts', db: databaseDraft(panel), dbDirty: false });
+		const html = renderPanel(panel, uiFor(panel, 'scripts'));
 		assert.ok(!html.includes('<img'));
 	});
 });

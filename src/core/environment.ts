@@ -153,6 +153,33 @@ export function buildCommandEnv(options: CommandEnvOptions): EnvMap {
 }
 
 /**
+ * Environment for a command when there's no database to point at (no URL configured, or no env
+ * file): process env → env file (if any) → `env` → script `env`. `${db.*}` placeholders stay as
+ * written.
+ */
+export function buildCommandEnvWithoutDatabase(options: Omit<CommandEnvOptions, 'database' | 'isMain' | 'env'> & { env?: ProjectEnv }): EnvMap {
+	const envFile = options.env?.main ?? {};
+	const context: PlaceholderContext = {
+		env: { ...options.processEnv, ...envFile },
+		inputs: options.inputs ?? {},
+		branch: options.branch,
+		extra: options.extra,
+	};
+	const result: EnvMap = {};
+	for (const [key, value] of Object.entries(options.processEnv)) {
+		if (value !== undefined) {
+			result[key] = value;
+		}
+	}
+	if (options.config.loadEnvFileIntoCommands) {
+		Object.assign(result, envFile);
+	}
+	Object.assign(result, resolveAll(options.config.env, context));
+	Object.assign(result, resolveAll(options.scriptEnv ?? {}, context));
+	return result;
+}
+
+/**
  * Only what the extension adds on top of the user's environment, for terminals and debug sessions.
  * The env file is left out unless both `loadEnvFileIntoCommands` and `loadEnvFileIntoTerminals` are on.
  */

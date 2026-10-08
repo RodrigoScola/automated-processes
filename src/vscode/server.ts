@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { EnvMap } from '../core/envFile';
 import { ServerControl } from '../core/ports';
 import { SKIPPED_DEBUG_TYPES, VsCodeEnvironmentSink } from './environment';
-import { TASK_TYPE } from './taskExecutor';
+import { DEFAULT_PRESENTATION, Presentation, revealTaskTerminal, TASK_TYPE, taskPresentation } from './taskExecutor';
 
 const TASK_ID_PREFIX = 'server:';
 /** Keep the sidebar in place instead of switching to the Run and Debug view. */
@@ -16,6 +16,8 @@ const FOCUS_GUARD_MS = 5000;
  */
 export class VsCodeServer implements ServerControl, vscode.Disposable {
 	private readonly executions = new Map<string, vscode.TaskExecution>();
+	/** Servers being stopped from here, whose exit isn't a failure. */
+	private readonly stopping = new Set<string>();
 	private readonly sessions = new Map<string, vscode.DebugSession>();
 	private readonly disposables: vscode.Disposable[] = [];
 
@@ -23,10 +25,16 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 		private readonly folder: vscode.WorkspaceFolder | undefined,
 		private readonly envSink: VsCodeEnvironmentSink,
 		private readonly onDidChange: () => void,
-		/** Print the command at the top of the terminal (off when commands may hold secrets). */
-		private readonly echo: () => boolean = () => true,
+		private readonly presentation: () => Presentation = () => DEFAULT_PRESENTATION,
 	) {
 		this.disposables.push(
+			// A server that crashes (not one stopped from here) shows its terminal with `onFailure`.
+			vscode.tasks.onDidEndTaskProcess((event) => {
+				const id = serverIdOf(event.execution.task);
+				if (id !== undefined && !this.stopping.delete(id) && event.exitCode !== 0 && this.presentation().reveal === 'onFailure') {
+					revealTaskTerminal(event.execution.task.name);
+				}
+			}),
 			vscode.tasks.onDidEndTask((event) => {
 				const id = serverIdOf(event.execution.task);
 				if (id !== undefined && this.executions.get(id) === event.execution) {
@@ -65,20 +73,17 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 			new vscode.ShellExecution(command, { cwd, env }),
 		);
 		task.isBackground = true;
-		task.presentationOptions = {
-			reveal: vscode.TaskRevealKind.Always,
-			panel: vscode.TaskPanelKind.Dedicated,
-			showReuseMessage: false,
-			clear: true,
-			focus: false,
-			echo: this.echo(),
-		};
+		task.presentationOptions = taskPresentation(this.presentation(), vscode.TaskPanelKind.Dedicated, true);
 		this.executions.set(id, await vscode.tasks.executeTask(task));
 		this.onDidChange();
 	}
 
 	stopServer(id: string): void {
-		this.executions.get(id)?.terminate();
+		const execution = this.executions.get(id);
+		if (execution) {
+			this.stopping.add(id);
+			execution.terminate();
+		}
 	}
 
 	runningDebugSessions(): string[] {
@@ -136,6 +141,7 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 				listener.dispose();
 				resolve();
 			}
+			this.stopping.add(id);
 			execution.terminate();
 		});
 		this.executions.delete(id);
@@ -173,7 +179,6 @@ async function withoutTerminalFocus<T>(launch: () => Thenable<T>): Promise<T> {
 	const before = new Set(vscode.window.terminals);
 	const refocus = (terminal: vscode.Terminal | undefined) => {
 		if (terminal && !before.has(terminal)) {
-			terminal.show(true);
 			void vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
 		}
 	};

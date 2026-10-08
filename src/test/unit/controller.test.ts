@@ -1,3 +1,4 @@
+import { ScriptDefinition } from '../../core/config';
 import * as assert from 'assert';
 import * as path from 'path';
 import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from '../../core/migrationSync';
@@ -766,15 +767,14 @@ suite('Controller: servers', () => {
 	});
 });
 
-suite('Controller: on git update (pull / merge)', () => {
-	const deps = { id: 'deps', label: 'Update Dependencies', icon: 'package', env: {}, inputs: {}, steps: [{ label: 'uv', run: 'uv sync --frozen' }, { label: 'npm', run: 'npm ci' }] };
-	function setup(onGitUpdate: Partial<{ mode: 'off' | 'ask' | 'always'; whenFilesChange: string[]; skipMainBranches: boolean }> = {}) {
-		const h = harness({
-			config: testConfig({
-				scripts: [deps],
-				onGitUpdate: { script: 'deps', mode: 'always', whenFilesChange: ['uv.lock', 'package-lock.json'], skipMainBranches: true, ...onGitUpdate },
-			}),
-		});
+suite('Controller: scripts that run by themselves', () => {
+	const deps = {
+		id: 'deps', label: 'Update Dependencies', icon: 'package', env: {}, inputs: {},
+		steps: [{ label: 'uv', run: 'uv sync --frozen' }, { label: 'npm', run: 'npm ci' }],
+		runOn: { gitUpdate: true, gitUpdatePatterns: ['uv.lock', 'package-lock.json'] },
+	};
+	function setup(scripts: ScriptDefinition[] = [deps]) {
+		const h = harness({ config: testConfig({ scripts }) });
 		h.git.commit = 'c1';
 		return h;
 	}
@@ -784,57 +784,24 @@ suite('Controller: on git update (pull / merge)', () => {
 		await h.controller.onGitStateChanged();
 	}
 
-	test('runs the script when a watched file changed in a pull/merge on a feature branch', async () => {
+	test('new commits run it when a watched file changed', async () => {
 		const h = setup();
 		await h.controller.start();
 		await update(h, ['backend/app.py', 'uv.lock']);
 		assert.deepStrictEqual(h.executor.requests.map((request) => request.command), ['uv sync --frozen', 'npm ci']);
-		assert.match(h.ui.messages('info')[0], /"feature\/login" was updated and uv\.lock changed\. Running Update Dependencies/);
+		assert.match(h.ui.messages('info')[0], /uv\.lock changed: running Update Dependencies/);
 	});
 
-	test('ignores updates that don\'t touch the watched files', async () => {
+	test('ignores commits that don\'t touch the watched files; without patterns every update runs it', async () => {
 		const h = setup();
 		await h.controller.start();
-		await update(h, ['backend/app.py', 'frontend/src/main.tsx']);
+		await update(h, ['backend/app.py']);
 		assert.strictEqual(h.executor.requests.length, 0);
-	});
 
-	test('without watched files, every update runs it', async () => {
-		const h = setup({ whenFilesChange: [] });
-		await h.controller.start();
-		await update(h, ['README.md']);
-		assert.strictEqual(h.executor.requests.length, 2);
-	});
-
-	test('skips main branches when asked to', async () => {
-		const h = setup();
-		h.git.branch = 'main';
-		await h.controller.start();
-		await update(h, ['uv.lock']);
-		assert.strictEqual(h.executor.requests.length, 0);
-		const all = setup({ skipMainBranches: false });
-		all.git.branch = 'main';
-		await all.controller.start();
-		await update(all, ['uv.lock']);
-		assert.strictEqual(all.executor.requests.length, 2);
-	});
-
-	test('"off" does nothing, "ask" runs only when accepted', async () => {
-		const off = setup({ mode: 'off' });
-		await off.controller.start();
-		await update(off, ['uv.lock']);
-		assert.strictEqual(off.executor.requests.length, 0);
-
-		const declined = setup({ mode: 'ask' });
-		await declined.controller.start();
-		await update(declined, ['uv.lock']);
-		assert.strictEqual(declined.executor.requests.length, 0);
-
-		const accepted = setup({ mode: 'ask' });
-		accepted.ui.infoAnswer = (_message, actions) => actions[0];
-		await accepted.controller.start();
-		await update(accepted, ['package-lock.json']);
-		assert.strictEqual(accepted.executor.requests.length, 2);
+		const always = setup([{ ...deps, runOn: { gitUpdate: true } }]);
+		await always.controller.start();
+		await update(always, ['README.md']);
+		assert.strictEqual(always.executor.requests.length, 2);
 	});
 
 	test('a branch switch is not an update, and the first commit seen never triggers', async () => {
@@ -849,15 +816,69 @@ suite('Controller: on git update (pull / merge)', () => {
 		assert.strictEqual(h.executor.requests.length, 0);
 	});
 
-	test('reports a failed run, the footer mode and the setting', async () => {
+	test('reports a failed automatic run', async () => {
 		const h = setup();
 		h.executor.exitCode = () => 1;
 		await h.controller.start();
 		await update(h, ['uv.lock']);
-		assert.match(h.ui.messages('error')[0], /Update Dependencies failed/);
-		assert.deepStrictEqual(h.controller.snapshot().gitUpdate, { label: 'Update Dependencies', mode: 'always' });
-		await h.controller.setGitUpdateMode('ask');
-		assert.deepStrictEqual(h.settings.updates, [['onGitUpdate.mode', 'ask']]);
+		assert.match(h.ui.messages('error')[0], /Update Dependencies \(run because uv\.lock changed\) failed/);
+	});
+
+	test('startup, branch change and file save triggers', async () => {
+		const run = (label: string, runOn: ScriptDefinition['runOn']): ScriptDefinition => ({ id: label, label, icon: 'play', env: {}, inputs: {}, steps: [{ label, run: label }], runOn });
+		const h = setup([
+			run('on-start', { startup: true }),
+			run('on-branch', { branchChange: true }),
+			run('on-py-save', { fileSave: true, fileSavePatterns: ['*.py'] }),
+			run('on-any-save', { fileSave: true }),
+			run('manual', undefined),
+		]);
+		await h.controller.start();
+		await h.controller.startupRun;
+		assert.deepStrictEqual(h.executor.requests.map((request) => request.command), ['on-start']);
+
+		h.git.branch = 'other';
+		h.git.branches.set('other', 'c9');
+		await h.controller.onGitStateChanged();
+		assert.deepStrictEqual(h.executor.requests.map((request) => request.command).slice(1), ['on-branch']);
+
+		await h.controller.onFilesSaved(['README.md']);
+		await h.controller.onFilesSaved(['backend/app/main.py']);
+		assert.deepStrictEqual(h.executor.requests.map((request) => request.command).slice(2), ['on-any-save', 'on-py-save', 'on-any-save']);
+	});
+
+	test('servers marked to run on startup start with VS Code', async () => {
+		const h = harness({
+			config: testConfig({
+				servers: [
+					{ id: 'api', label: 'API', command: 'serve', debugConfiguration: '', restartOnDatabaseChange: true, runOnStartup: true },
+					{ id: 'web', label: 'Web', command: 'vite', debugConfiguration: '', restartOnDatabaseChange: false },
+				],
+			}),
+		});
+		await h.controller.start();
+		await h.controller.startupRun;
+		assert.deepStrictEqual([...h.server.running], ['api']);
+	});
+
+	test('scripts and servers run without a database connection', async () => {
+		const h = harness({
+			env: { main: {} },
+			config: testConfig({
+				env: { WHERE: '${branch}' },
+				scripts: [{ id: 'lint', label: 'Lint', icon: 'play', env: {}, inputs: {}, steps: [{ label: 'lint', run: 'npm run lint' }] }],
+				servers: [{ id: 'web', label: 'Web', command: 'vite', debugConfiguration: '', restartOnDatabaseChange: false }],
+			}),
+		});
+		await h.controller.start();
+		assert.ok(h.controller.snapshot().problems.some((problem) => /DATABASE_URL is not set/.test(problem)));
+		const state = await h.controller.runScript('lint');
+		assert.strictEqual(state?.status, 'passed');
+		assert.strictEqual(h.executor.requests[0].env.WHERE, 'feature/login');
+		assert.ok(!('DATABASE_URL' in h.executor.requests[0].env));
+		await h.controller.startServer('web');
+		assert.deepStrictEqual([...h.server.running], ['web']);
+		assert.deepStrictEqual(h.ui.messages('error'), []);
 	});
 });
 

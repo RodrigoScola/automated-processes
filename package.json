@@ -2,7 +2,7 @@
   "name": "automated-processes",
   "displayName": "Automated Processes",
   "description": "Per-branch PostgreSQL databases and one-click project scripts.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "rodrigoscola",
   "license": "MIT",
   "repository": {
@@ -38,7 +38,22 @@
         {
           "type": "webview",
           "id": "automatedProcesses.sidebar",
-          "name": "Automated Processes"
+          "name": "Database"
+        },
+        {
+          "type": "webview",
+          "id": "automatedProcesses.servers",
+          "name": "Servers"
+        },
+        {
+          "type": "webview",
+          "id": "automatedProcesses.scripts",
+          "name": "Scripts"
+        },
+        {
+          "type": "webview",
+          "id": "automatedProcesses.options",
+          "name": "Settings"
         }
       ]
     },
@@ -51,9 +66,27 @@
       },
       {
         "command": "automated-processes.migrate",
-        "title": "Export Data (Copy Database)",
+        "title": "Copy Database into Another",
         "category": "Automated Processes",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "automated-processes.exportData",
+        "title": "Export Data (to a Database or a File)",
+        "category": "Automated Processes",
+        "icon": "$(export)"
+      },
+      {
+        "command": "automated-processes.importData",
+        "title": "Import Data (from a Database or a File)",
+        "category": "Automated Processes",
+        "icon": "$(desktop-download)"
+      },
+      {
+        "command": "automated-processes.backupDatabase",
+        "title": "Back Up Database",
+        "category": "Automated Processes",
+        "icon": "$(archive)"
       },
       {
         "command": "automated-processes.switchDatabase",
@@ -136,6 +169,24 @@
         "icon": "$(settings-gear)"
       },
       {
+        "command": "automated-processes.configureDatabase",
+        "title": "Configure Database Connection",
+        "category": "Automated Processes",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "automated-processes.configureServers",
+        "title": "Add or Edit Servers",
+        "category": "Automated Processes",
+        "icon": "$(add)"
+      },
+      {
+        "command": "automated-processes.configureScripts",
+        "title": "Add or Edit Scripts and Migrations",
+        "category": "Automated Processes",
+        "icon": "$(add)"
+      },
+      {
         "command": "automated-processes.openSettings",
         "title": "Open Settings",
         "category": "Automated Processes",
@@ -155,13 +206,33 @@
     "menus": {
       "view/title": [
         {
-          "command": "automated-processes.configure",
+          "command": "automated-processes.configureDatabase",
           "when": "view == automatedProcesses.sidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "automated-processes.refresh",
+          "when": "view == automatedProcesses.sidebar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "automated-processes.configureServers",
+          "when": "view == automatedProcesses.servers",
+          "group": "navigation"
+        },
+        {
+          "command": "automated-processes.configureScripts",
+          "when": "view == automatedProcesses.scripts",
+          "group": "navigation"
+        },
+        {
+          "command": "automated-processes.configure",
+          "when": "view == automatedProcesses.options",
           "group": "navigation"
         },
         {
           "command": "automated-processes.openSettings",
-          "when": "view == automatedProcesses.sidebar",
+          "when": "view =~ /^automatedProcesses./",
           "group": "more"
         }
       ]
@@ -228,6 +299,22 @@
           "order": 5,
           "markdownDescription": "Print each command at the top of its terminal, with placeholders filled in. Turn off if commands contain secrets (e.g. `${db.url}` with a password), so they don't show up in terminal output."
         },
+        "automatedProcesses.revealTerminal": {
+          "type": "string",
+          "enum": [
+            "never",
+            "onFailure",
+            "always"
+          ],
+          "enumDescriptions": [
+            "Scripts and servers run in background terminals; the terminal panel and focus stay where they are.",
+            "Show the terminal (without focusing it) when a script step or a server fails.",
+            "Show the terminal each time (never focused)."
+          ],
+          "default": "never",
+          "order": 6,
+          "markdownDescription": "When the terminal of a script or server comes into view. It never takes focus. The sidebar's **output** links show it any time."
+        },
         "automatedProcesses.database.engine": {
           "type": "string",
           "enum": [
@@ -277,6 +364,12 @@
           "default": "",
           "order": 13,
           "markdownDescription": "Docker Compose service running PostgreSQL (`docker compose exec <service>`, run from the workspace folder). Alternative to `#automatedProcesses.database.dockerContainer#`."
+        },
+        "automatedProcesses.database.backupFolder": {
+          "type": "string",
+          "default": "",
+          "order": 13,
+          "markdownDescription": "Folder for **Backup** and the default for **Export Data** / **Import Data** files, relative to the workspace. Empty = the extension's own storage, outside the repository (backups hold real data; if you pick a folder inside the repository, add it to `.gitignore`)."
         },
         "automatedProcesses.database.autoStartContainer": {
           "type": "boolean",
@@ -359,6 +452,12 @@
           "default": "",
           "order": 30,
           "markdownDescription": "Command that applies migrations to the current database, e.g. `npx prisma migrate deploy`. Runs after **New Database**, after **Export Data** (see `#automatedProcesses.migrations.afterCopy#`) and on branch change."
+        },
+        "automatedProcesses.migrations.cwd": {
+          "type": "string",
+          "default": "",
+          "order": 30,
+          "markdownDescription": "Folder the migrations command runs in, relative to the workspace (e.g. `backend`). Empty = the workspace folder."
         },
         "automatedProcesses.migrations.onBranchChange": {
           "type": "string",
@@ -466,6 +565,10 @@
                 "type": "boolean",
                 "default": true,
                 "description": "Restart it when the current database changes. Turn off for servers that don't use the database, like a frontend."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Folder the command runs in, relative to the workspace, e.g. frontend."
               }
             }
           }
@@ -613,15 +716,19 @@
                     }
                   }
                 }
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Folder the steps run in, relative to the workspace."
               }
             }
           }
         },
         "automatedProcesses.server.includeLaunchConfigurations": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "order": 35,
-          "markdownDescription": "Show each `launch` configuration of `.vscode/launch.json` as a server with a debug button (browsers excluded), listed first. A server in `#automatedProcesses.servers#` whose `debugConfiguration` names one takes its place and adds its run command."
+          "markdownDescription": "Show every `launch` configuration of `.vscode/launch.json` as a server, without adding them one by one in **Configure → Servers** (browsers excluded)."
         }
       }
     }

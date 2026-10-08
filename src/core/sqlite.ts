@@ -116,6 +116,42 @@ export class SqliteEngine implements DatabaseEngine {
 		}
 	}
 
+	get fileExtension(): string {
+		return this.extension;
+	}
+
+	/**
+	 * A consistent single-file copy with `sqlite3 .backup` when the tool is there; otherwise the
+	 * file plus its write-ahead log (`<file>-wal`), which SQLite reads back together.
+	 */
+	async dumpToFile(database: string, file: string): Promise<void> {
+		const source = this.fileOf(database);
+		if (!fs.existsSync(source)) {
+			throw new Error(`${path.basename(source)} not found in ${this.folder}.`);
+		}
+		const backup = await this.run({ command: 'sqlite3', args: [source, `.backup '${file.replace(/'/g, "''")}'`], cwd: this.settings.cwd, env: this.settings.processEnv })
+			.catch(() => undefined);
+		if (backup?.code === 0) {
+			return;
+		}
+		await fs.promises.copyFile(source, file);
+		await fs.promises.rm(file + '-wal', { force: true });
+		if (fs.existsSync(source + '-wal')) {
+			await fs.promises.copyFile(source + '-wal', file + '-wal');
+		}
+	}
+
+	async restoreFromFile(file: string, database: string): Promise<void> {
+		const target = this.fileOf(database);
+		await fs.promises.copyFile(file, target);
+		for (const suffix of COMPANION_SUFFIXES) {
+			await fs.promises.rm(target + suffix, { force: true });
+		}
+		if (fs.existsSync(file + '-wal')) {
+			await fs.promises.copyFile(file + '-wal', target + '-wal');
+		}
+	}
+
 	async exposedAddresses(): Promise<string[]> {
 		return [];
 	}

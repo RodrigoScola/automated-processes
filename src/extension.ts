@@ -15,7 +15,7 @@ import { Overrides } from './vscode/overrides';
 import { VsCodeGit } from './vscode/git';
 import { VsCodeServer } from './vscode/server';
 import { readSettings, SECTION, VsCodeSettings } from './vscode/settings';
-import { SIDEBAR_VIEW_ID, SidebarProvider } from './vscode/sidebar';
+import { SIDEBAR_VIEWS, SidebarProvider } from './vscode/sidebar';
 import { StatusBar } from './vscode/statusBar';
 import { TaskExecutor } from './vscode/taskExecutor';
 import { VsCodeUi } from './vscode/ui';
@@ -26,16 +26,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	const root = folder?.uri.fsPath;
 
-	const overrides = new Overrides(context.workspaceState, context.secrets, folder);
+	const overrides = new Overrides({ local: context.workspaceState, global: context.globalState }, context.secrets, folder);
 	await overrides.load();
 	const settings = () => readSettings(folder, overrides);
-	const echoCommands = () => settings().config.echoCommands;
-	const executor = new TaskExecutor(folder, echoCommands);
+	const presentation = () => ({ echo: settings().config.echoCommands, reveal: settings().config.revealTerminal });
+	const executor = new TaskExecutor(folder, presentation);
 	const git = new VsCodeGit(root ?? '');
 	const envSink = new VsCodeEnvironmentSink(context, folder);
 	const statusBar = new StatusBar();
-	let sidebar: SidebarProvider | undefined;
-	const server = new VsCodeServer(folder, envSink, () => notify(), echoCommands);
+	let views: SidebarProvider[] = [];
+	const server = new VsCodeServer(folder, envSink, () => notify(), presentation);
 
 	const controller: Controller = new Controller({
 		ui: new VsCodeUi(),
@@ -51,6 +51,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		createEngine: (settings) => (settings.engine === 'sqlite' ? new SqliteEngine(settings) : new PostgresEngine(settings)),
 		server,
 		processEnv: process.env,
+		// Backups hold real data, so by default they stay out of the repository.
+		backupFolder: () => path.join(context.globalStorageUri.fsPath, 'backups'),
 		onDidChange: () => notify(),
 	});
 
@@ -72,17 +74,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 
 	function notify(): void {
 		const state = controller.snapshot();
-		sidebar?.update();
+		views.forEach((view) => view.update());
 		statusBar.update(state);
 	}
 
-	sidebar = new SidebarProvider(context.extensionUri, () => controller.snapshot(), (message) => void handleMessage(controller, executor, message));
+	views = SIDEBAR_VIEWS.map((view) => new SidebarProvider(view.part, context.extensionUri, () => controller.snapshot(), (message) => void handleMessage(controller, executor, message)));
 
 	context.subscriptions.push(
 		git,
 		statusBar,
 		server,
-		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
+		...SIDEBAR_VIEWS.map((view, index) => vscode.window.registerWebviewViewProvider(view.id, views[index], { webviewOptions: { retainContextWhenHidden: true } })),
 		vscode.debug.registerDebugConfigurationProvider('*', envSink),
 		panel,
 		...registerCommands(controller, executor, panel),
@@ -98,6 +100,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '.env*'));
 		const onEnvChange = debounce(() => void controller.refresh(), 300);
 		context.subscriptions.push(watcher, watcher.onDidChange(onEnvChange), watcher.onDidCreate(onEnvChange), watcher.onDidDelete(onEnvChange));
+
+		// Saves are collected briefly, so Save All runs each "on file save" script once.
+		const saved = new Set<string>();
+		const onSaved = debounce(() => {
+			const files = [...saved];
+			saved.clear();
+			void controller.onFilesSaved(files);
+		}, 500);
+		context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+			const relative = path.relative(root, document.uri.fsPath);
+			if (document.uri.scheme === 'file' && relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+				saved.add(relative.split(path.sep).join('/'));
+				onSaved();
+			}
+		}));
 
 		const onGit = debounce(() => void controller.onGitStateChanged(), 200);
 		const onGitSettled = debounce(() => void controller.checkFinishedBranches(), 3000);
@@ -129,9 +146,20 @@ function readEnv(root: string, config: Config): ProjectEnv {
 
 function registerCommands(controller: Controller, executor: TaskExecutor, panel: ConfigurePanel): vscode.Disposable[] {
 	const commands: Record<string, (...args: unknown[]) => unknown> = {
-		configure: (tab?: unknown) => panel.show(tab === 'servers' || tab === 'scripts' ? tab : 'database'),
+		// `servers`, `scripts` or `database`; `servers:detect` also runs Add defaults.
+		configure: (section?: unknown) => {
+			const [tab, action] = typeof section === 'string' ? section.split(':') : [];
+			panel.show(tab === 'servers' || tab === 'scripts' ? tab : 'database', action === 'detect');
+		},
+		// For the view title buttons, which can't pass arguments.
+		configureDatabase: () => panel.show('database'),
+		configureServers: () => panel.show('servers'),
+		configureScripts: () => panel.show('scripts'),
 		newDatabase: () => controller.newDatabase(),
 		migrate: () => controller.migrate(),
+		exportData: () => controller.exportData(),
+		importData: () => controller.importData(),
+		backupDatabase: (name?: unknown) => controller.backupDatabase(typeof name === 'string' ? name : undefined),
 		switchDatabase: (name?: unknown) => controller.switchDatabase(typeof name === 'string' ? name : undefined),
 		switchBack: () => controller.switchBack(),
 		removeDatabase: (name?: unknown) => controller.removeDatabase(typeof name === 'string' ? name : undefined),
@@ -220,8 +248,6 @@ async function handleMessage(controller: Controller, executor: TaskExecutor, mes
 			return controller.setImportDataOnCreate(message.value);
 		case 'setServerRestartMode':
 			return controller.setServerRestartMode(message.value);
-		case 'setGitUpdateMode':
-			return controller.setGitUpdateMode(message.value);
 	}
 }
 

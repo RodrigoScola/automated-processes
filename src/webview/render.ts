@@ -52,17 +52,32 @@ function iconButton(iconName: string, title: string, attrs: string): string {
 	return `<button class="icon-button" title="${e(title)}" aria-label="${e(title)}" ${attrs}>${icon(iconName)}</button>`;
 }
 
-export function renderApp(state: ViewState, now: number = state.now): string {
-	if (!state.hasWorkspace) {
-		return `<div class="empty">${icon('folder-opened', 'empty-icon')}<p>Open a folder to use Automated Processes.</p></div>`;
-	}
-	return [
-		state.busy ? '<div class="busy-bar" role="progressbar" aria-label="Working"></div>' : '',
-		renderProblems(state),
-		renderDatabaseSection(state, now),
-		renderScriptsSection(state, now),
-		renderFooter(state),
-	].join('');
+/** One sidebar view each (`database`, `servers`, `scripts`, `options`), or `all` of them with section headers. */
+export type SidebarPart = 'all' | 'database' | 'servers' | 'scripts' | 'options';
+
+/** A message with buttons, for a view that has nothing to show yet. */
+function emptyState(iconName: string, message: string, buttons: string[]): string {
+	return `<div class="empty-state">${icon(iconName, 'empty-icon')}<p>${message}</p><div class="empty-actions">${buttons.join('')}</div></div>`;
+}
+
+function configureButton(label: string, section: string, iconName: string, secondary = false, detect = false): string {
+	return `<vscode-button icon="${iconName}"${secondary ? ' secondary' : ''} data-command="configure" data-section="${section}${detect ? ':detect' : ''}">${label}</vscode-button>`;
+}
+
+export function renderApp(state: ViewState, now: number = state.now, part: SidebarPart = 'all'): string {
+	// Every view always shows something; only the database needs a folder.
+	const noFolder = emptyState('folder-opened', 'Open a folder to get per-branch databases.', []);
+	const headers = part === 'all';
+	const busy = state.busy && part !== 'options' ? '<div class="busy-bar" role="progressbar" aria-label="Working"></div>' : '';
+	const parts: Record<Exclude<SidebarPart, 'all'>, () => string> = {
+		database: () => (state.hasWorkspace ? renderProblems(state) + renderDatabaseSection(state, now, headers) : noFolder),
+		servers: () => renderServersSection(state, headers),
+		scripts: () => renderScriptsSection(state, now, headers),
+		options: () => renderFooter(state),
+	};
+	return busy + (part === 'all'
+		? [parts.database(), parts.servers(), parts.scripts(), parts.options()].join('')
+		: parts[part]());
 }
 
 function renderProblems(state: ViewState): string {
@@ -74,26 +89,36 @@ function renderProblems(state: ViewState): string {
 		.join('')}</ul><button class="link" data-command="configure">Configure</button> · <button class="link" data-command="openSettings">Open settings</button></div></div>`;
 }
 
-function renderDatabaseSection(state: ViewState, now: number): string {
+function renderDatabaseSection(state: ViewState, now: number, header: boolean): string {
 	const warnings = state.warnings
 		.map((warning) => `<div class="banner banner-warn">${icon('warning')}<div>${e(warning.message)}${warning.action
 			? ` <button class="link" data-command="${e(warning.action.command)}">${e(warning.action.label)}</button>`
 			: ''}</div></div>`)
 		.join('');
 	const disabled = state.busy || state.dbStatus !== 'ok' ? ' disabled' : '';
+	// No URL to work with yet (no env file, no variable): point at the connection settings.
+	const body = !state.current
+		? emptyState('database', 'No database connection yet. Point it at your PostgreSQL or SQLite database to get one per branch.', [
+			configureButton('Set up connection', 'database', 'plug'),
+		])
+		: `${renderCurrentCard(state, now)}
+		<div class="button-row">
+			<vscode-button icon="add" data-command="newDatabase"${disabled}>New Database</vscode-button>
+			<vscode-button icon="archive" secondary data-command="backupDatabase" title="Save a copy of the current database to a file"${disabled}>Backup</vscode-button>
+		</div>
+		<div class="button-row">
+			<vscode-button icon="export" secondary data-command="exportData" title="Copy a database into another one, or to a file"${disabled}>Export Data</vscode-button>
+			<vscode-button icon="desktop-download" secondary data-command="importData" title="Replace the current database with another database or a file"${disabled}>Import Data</vscode-button>
+		</div>
+		${renderDatabaseList(state)}`;
 
 	return `<section class="section">
-		<header class="section-header">
+		${header ? `<header class="section-header">
 			<h2>Database</h2>
 			<div class="toolbar">${iconButton('settings-gear', 'Database connection', 'data-command="configure" data-section="database"')}${iconButton('refresh', 'Refresh', 'data-command="refresh"')}</div>
-		</header>
+		</header>` : ''}
 		${warnings}
-		${renderCurrentCard(state, now)}
-		<div class="button-row">
-			<vscode-button icon="arrow-swap" data-command="migrate"${disabled}>Export Data</vscode-button>
-			<vscode-button icon="add" secondary data-command="newDatabase"${disabled}>New Database</vscode-button>
-		</div>
-		${renderDatabaseList(state)}
+		${body}
 	</section>`;
 }
 
@@ -149,6 +174,7 @@ function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
 	const n = e(db.name);
 	const actions = busy ? '' : [
 		db.isCurrent ? '' : iconButton('arrow-right', `Use ${db.name} for this branch`, `data-command="switchDatabase" data-database="${n}"`),
+		iconButton('archive', `Back up ${db.name}`, `data-command="backupDatabase" data-database="${n}"`),
 		iconButton('export', `Copy ${db.name} into…`, `data-migrate-from="${n}"`),
 		iconButton('desktop-download', `Copy … into ${db.name}`, `data-migrate-to="${n}"`),
 		db.isMain ? '' : iconButton('trash', `Drop ${db.name}`, `data-command="removeDatabase" data-database="${n}"`),
@@ -160,7 +186,20 @@ function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
 	</li>`;
 }
 
-function renderScriptsSection(state: ViewState, now: number): string {
+function renderServersSection(state: ViewState, header: boolean): string {
+	const rows = renderServers(state);
+	return `<section class="section">
+		${header ? `<header class="section-header"><h2>Servers</h2>
+			<div class="toolbar">${iconButton('settings-gear', 'Add or edit servers', 'data-command="configure" data-section="servers"')}</div>
+		</header>` : ''}
+		${rows || emptyState('server-process', 'No servers yet. Add your backend, frontend or a launch.json configuration to run and debug it from here.', [
+		state.hasWorkspace ? configureButton('Add defaults', 'servers', 'sparkle', false, true) : '',
+		configureButton('Add server', 'servers', 'add', state.hasWorkspace),
+	])}
+	</section>`;
+}
+
+function renderScriptsSection(state: ViewState, now: number, header: boolean): string {
 	const busy = Boolean(state.busy) || state.run?.status === 'running';
 	const scripts = state.scripts.map((script) => renderScript(script, busy)).join('');
 	const noRun = busy || !state.current ? ' disabled' : '';
@@ -174,13 +213,15 @@ function renderScriptsSection(state: ViewState, now: number): string {
 	].join('');
 	const migrations = migrationButtons ? `<div class="script">${migrationButtons}</div>` : '';
 	const empty = !scripts && !migrations
-		? '<div class="hint">No scripts yet. <button class="link" data-command="configure" data-section="scripts">Add a script</button> or <button class="link" data-command="configure" data-section="servers">a server</button>.</div>'
+		? emptyState('play', 'No scripts yet. Add buttons for installing dependencies, checks or seeding, and set up migrations to get Run Migrations here.', [
+			state.hasWorkspace ? configureButton('Add defaults', 'scripts', 'sparkle', false, true) : '',
+			configureButton('Add script', 'scripts', 'add', state.hasWorkspace),
+		])
 		: '';
 	return `<section class="section">
-		<header class="section-header"><h2>Scripts</h2>
-			<div class="toolbar">${iconButton('server-process', 'Add or edit servers', 'data-command="configure" data-section="servers"')}${iconButton('settings-gear', 'Add or edit scripts', 'data-command="configure" data-section="scripts"')}</div>
-		</header>
-		${renderServers(state)}
+		${header ? `<header class="section-header"><h2>Scripts</h2>
+			<div class="toolbar">${iconButton('settings-gear', 'Add or edit scripts and migrations', 'data-command="configure" data-section="scripts"')}</div>
+		</header>` : ''}
 		<div class="scripts">${scripts}${migrations}</div>
 		${empty}
 		${state.run ? renderRun(state.run, state.scripts, now) : ''}
@@ -295,11 +336,6 @@ function renderFooter(state: ViewState): string {
 				${(['restart', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.serverRestartMode === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
 			</vscode-single-select>
 		</label>
-		${state.gitUpdate ? `<label class="footer-row"><span title="Runs &quot;${e(state.gitUpdate.label)}&quot; when this branch gets new commits from a pull, merge or rebase (only when the watched files changed).">${e(state.gitUpdate.label)} automatically</span>
-			<vscode-single-select class="branch-mode" data-git-update aria-label="${e(state.gitUpdate.label)} automatically">
-				${(['always', 'ask', 'off'] as const).map((value) => `<vscode-option value="${value}"${state.gitUpdate?.mode === value ? ' selected' : ''}>${value}</vscode-option>`).join('')}
-			</vscode-single-select>
-		</label>` : ''}
 	</footer>`;
 }
 

@@ -93,8 +93,6 @@ export interface ViewState {
 	onBranchChange: BranchChangeMode;
 	/** New Database copies the main database's data into the new one. */
 	importDataOnCreate: boolean;
-	/** The script run after pulls/merges (`onGitUpdate`), when one is configured. */
-	gitUpdate?: { label: string; mode: BranchChangeMode };
 	servers: ViewServer[];
 	/** Debug sessions not tied to a configured server (also restarted on database change). */
 	otherDebugSessions: string[];
@@ -106,6 +104,9 @@ export interface ViewState {
 export type CommandName =
 	| 'newDatabase'
 	| 'migrate'
+	| 'exportData'
+	| 'importData'
+	| 'backupDatabase'
 	| 'switchDatabase'
 	| 'switchBack'
 	| 'removeDatabase'
@@ -126,7 +127,7 @@ export type CommandName =
 
 export type WebviewMessage =
 	| { type: 'ready' }
-	| { type: 'command'; command: CommandName; database?: string; server?: string; section?: 'database' | 'servers' | 'scripts' }
+	| { type: 'command'; command: CommandName; database?: string; server?: string; section?: string }
 	| { type: 'migrateFrom'; database: string }
 	| { type: 'migrateTo'; database: string }
 	| { type: 'runScript'; scriptId: string; step?: number }
@@ -135,7 +136,6 @@ export type WebviewMessage =
 	| { type: 'setShowAll'; value: boolean }
 	| { type: 'setOnBranchChange'; value: BranchChangeMode }
 	| { type: 'setImportDataOnCreate'; value: boolean }
-	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' }
-	| { type: 'setGitUpdateMode'; value: BranchChangeMode };
+	| { type: 'setServerRestartMode'; value: 'restart' | 'ask' | 'off' };
 
 export type ExtensionMessage = { type: 'state'; state: ViewState };

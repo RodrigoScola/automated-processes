@@ -40,8 +40,13 @@ suite('Extension (in VS Code)', function () {
 	test('runs a script as a VS Code task with the database environment', async () => {
 		const output = path.join(workspace(), 'env-output.json');
 		fs.rmSync(output, { force: true });
+		const mine = vscode.window.createTerminal('mine');
+		mine.show();
 		const result = await controller.runScript('print-env');
 		assert.strictEqual(result?.status, 'passed', JSON.stringify(result));
+		// The task ran in a background terminal: the one in use stays active.
+		assert.strictEqual(vscode.window.activeTerminal?.name, 'mine');
+		mine.dispose();
 		const env = JSON.parse(fs.readFileSync(output, 'utf8'));
 		assert.deepStrictEqual(env, {
 			DATABASE_URL: 'postgres://fixture:fixture-pw@127.0.0.1:1/fixture_app',

@@ -5,6 +5,8 @@ import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from './migra
 export type BranchChangeMode = 'off' | 'ask' | 'always';
 export type MergedBranchMode = 'delete' | 'keep';
 export type ServerRestartMode = 'restart' | 'ask' | 'off';
+/** When the terminal of a script or server comes into view. */
+export type RevealMode = 'never' | 'onFailure' | 'always';
 /** `auto` picks SQLite for SQLite URLs (`sqlite:///…`, `file:…`, `*.db`) and PostgreSQL otherwise. */
 export type DatabaseEngineKind = 'auto' | 'postgres' | 'sqlite';
 
@@ -17,10 +19,29 @@ export type ScriptStep =
 	| { label: string; run: string }
 	| { label: string; copyFile: { from: string; to: string; ifMissing: boolean } };
 
+/** When a script runs by itself. Absent = only from its button. */
+export interface ScriptTriggers {
+	/** When VS Code starts (the extension activates). */
+	startup?: boolean;
+	/** After switching branches. */
+	branchChange?: boolean;
+	/** When a file is saved in the editor. */
+	fileSave?: boolean;
+	/** Only saves of files matching one of these globs (`*.py`, `src/*`); empty = any file. */
+	fileSavePatterns?: string[];
+	/** When the current branch gets new commits (pull, merge, rebase), e.g. to update dependencies. */
+	gitUpdate?: boolean;
+	/** Only when one of these files (globs, repo-relative) changed in those commits; empty = always. */
+	gitUpdatePatterns?: string[];
+}
+
 export interface ScriptDefinition {
 	id: string;
 	label: string;
 	icon: string;
+	/** Folder the steps run in, relative to the workspace; absent = the workspace. */
+	cwd?: string;
+	runOn?: ScriptTriggers;
 	env: Record<string, string>;
 	inputs: Record<string, ScriptInput>;
 	steps: ScriptStep[];
@@ -52,6 +73,8 @@ export interface Config {
 	applyToDebugSessions: boolean;
 	/** Print each command at the top of its terminal. */
 	echoCommands: boolean;
+	/** Show the terminal of a script or server: never (it runs in the background), on failure, or always. */
+	revealTerminal: RevealMode;
 	database: {
 		engine: DatabaseEngineKind;
 		/** Main database URL entered in the extension; empty = read it from the env file. */
@@ -62,6 +85,8 @@ export interface Config {
 		mainBranches: string[];
 		dockerContainer: string;
 		dockerComposeService: string;
+		/** Folder for backups and exports, relative to the workspace; empty = the extension's storage. */
+		backupFolder: string;
 		/** Start a stopped database container without asking (on startup and Retry). */
 		autoStartContainer: boolean;
 		/** Warn when the database container publishes its port on every network interface. */
@@ -79,6 +104,8 @@ export interface Config {
 	};
 	migrations: {
 		command: string;
+		/** Folder the migrations command runs in, relative to the workspace; empty = the workspace. */
+		cwd: string;
 		onBranchChange: BranchChangeMode;
 		afterCopy: boolean;
 		streams: MigrationStream[];
@@ -112,6 +139,10 @@ export interface ServerDefinition {
 	debugConfiguration: string;
 	/** Restart it when the current database changes (off for e.g. a frontend). */
 	restartOnDatabaseChange: boolean;
+	/** Folder the command runs in, relative to the workspace; absent = the workspace. */
+	cwd?: string;
+	/** Start it when VS Code starts (with its command, else under the debugger). */
+	runOnStartup?: boolean;
 	/** Where it comes from, once merged with launch.json (see `mergeLaunchServers`). */
 	source?: 'config' | 'launch' | 'both';
 }
@@ -154,6 +185,7 @@ export const DEFAULT_CONFIG: Config = {
 	applyToTerminals: true,
 	applyToDebugSessions: true,
 	echoCommands: true,
+	revealTerminal: 'never',
 	database: {
 		engine: 'auto',
 		url: '',
@@ -162,6 +194,7 @@ export const DEFAULT_CONFIG: Config = {
 		mainBranches: ['main'],
 		dockerContainer: '',
 		dockerComposeService: '',
+		backupFolder: '',
 		autoStartContainer: true,
 		warnIfPortExposed: true,
 		hidePatterns: ['postgres'],
@@ -176,13 +209,14 @@ export const DEFAULT_CONFIG: Config = {
 	},
 	migrations: {
 		command: '',
+		cwd: '',
 		onBranchChange: 'ask',
 		afterCopy: true,
 		streams: [],
 	},
 	server: {
 		onDatabaseChange: 'restart',
-		includeLaunchConfigurations: true,
+		includeLaunchConfigurations: false,
 	},
 	servers: [],
 	onGitUpdate: {
@@ -214,6 +248,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 		applyToTerminals: bool(read('applyToTerminals'), d.applyToTerminals),
 		applyToDebugSessions: bool(read('applyToDebugSessions'), d.applyToDebugSessions),
 		echoCommands: bool(read('echoCommands'), d.echoCommands),
+		revealTerminal: oneOf(read('revealTerminal'), ['never', 'onFailure', 'always'], d.revealTerminal),
 		database: {
 			engine: oneOf(read('database.engine'), ['auto', 'postgres', 'sqlite'], d.database.engine),
 			url: str(read('database.url'), d.database.url, true),
@@ -222,6 +257,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 			mainBranches: strList(read('database.mainBranches'), d.database.mainBranches),
 			dockerContainer: dockerName(read('database.dockerContainer'), 'database.dockerContainer', problems),
 			dockerComposeService: dockerName(read('database.dockerComposeService'), 'database.dockerComposeService', problems),
+			backupFolder: str(read('database.backupFolder'), d.database.backupFolder, true),
 			autoStartContainer: bool(read('database.autoStartContainer'), d.database.autoStartContainer),
 			warnIfPortExposed: bool(read('database.warnIfPortExposed'), d.database.warnIfPortExposed),
 			hidePatterns: strList(read('database.hidePatterns'), d.database.hidePatterns, true),
@@ -236,6 +272,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 		},
 		migrations: {
 			command: str(read('migrations.command'), d.migrations.command, true),
+			cwd: str(read('migrations.cwd'), d.migrations.cwd, true),
 			onBranchChange: oneOf(read('migrations.onBranchChange'), ['off', 'ask', 'always'], d.migrations.onBranchChange),
 			afterCopy: bool(read('migrations.afterCopy'), d.migrations.afterCopy),
 			streams: readStreams(read('migrations.streams'), problems),
@@ -256,6 +293,11 @@ export function readConfig(read: SettingReader): ConfigResult {
 	if (config.onGitUpdate.script && !config.scripts.some((script) => script.id === config.onGitUpdate.script)) {
 		problems.push(`onGitUpdate.script: no script with id "${config.onGitUpdate.script}" in scripts.`);
 	}
+	// The older onGitUpdate settings become that script's "new commits" trigger.
+	const legacy = config.onGitUpdate;
+	config.scripts = config.scripts.map((script) => (script.id === legacy.script && legacy.mode !== 'off' && !script.runOn?.gitUpdate
+		? { ...script, runOn: { ...script.runOn, gitUpdate: true, ...(legacy.whenFilesChange.length ? { gitUpdatePatterns: legacy.whenFilesChange } : {}) } }
+		: script));
 	return { config, problems };
 }
 
@@ -292,7 +334,16 @@ function readServers(raw: unknown, legacyCommand: unknown, legacyDebug: unknown,
 			return;
 		}
 		seen.add(id);
-		servers.push({ id, label, command, debugConfiguration, restartOnDatabaseChange: bool(item.restartOnDatabaseChange, true) });
+		const cwd = str(item.cwd, '', true);
+		servers.push({
+			id,
+			label,
+			command,
+			debugConfiguration,
+			restartOnDatabaseChange: bool(item.restartOnDatabaseChange, true),
+			...(cwd ? { cwd } : {}),
+			...(item.runOnStartup === true ? { runOnStartup: true } : {}),
+		});
 	});
 	return servers;
 }
@@ -368,12 +419,32 @@ function readScripts(raw: unknown, problems: string[]): ScriptDefinition[] {
 			id,
 			label,
 			icon: typeof item.icon === 'string' && item.icon ? item.icon : 'play',
+			...(typeof item.cwd === 'string' && item.cwd.trim() ? { cwd: item.cwd.trim() } : {}),
+			...readTriggers(item.runOn),
 			env: stringMap(item.env, `${where}.env`, problems),
 			inputs: readInputs(item.inputs, where, problems),
 			steps,
 		});
 	});
 	return scripts;
+}
+
+/** `runOn`, kept only when something is on (so scripts without it compare equal). */
+function readTriggers(raw: unknown): { runOn?: ScriptTriggers } {
+	if (!isObject(raw)) {
+		return {};
+	}
+	const patterns = strList(raw.fileSavePatterns, [], true);
+	const gitPatterns = strList(raw.gitUpdatePatterns, [], true);
+	const runOn: ScriptTriggers = {
+		...(raw.startup === true ? { startup: true } : {}),
+		...(raw.branchChange === true ? { branchChange: true } : {}),
+		...(raw.fileSave === true ? { fileSave: true } : {}),
+		...(raw.fileSave === true && patterns.length ? { fileSavePatterns: patterns } : {}),
+		...(raw.gitUpdate === true ? { gitUpdate: true } : {}),
+		...(raw.gitUpdate === true && gitPatterns.length ? { gitUpdatePatterns: gitPatterns } : {}),
+	};
+	return Object.keys(runOn).length ? { runOn } : {};
 }
 
 function readSteps(raw: unknown, where: string, problems: string[]): ScriptStep[] {

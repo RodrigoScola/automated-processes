@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 
 export interface ProcessSpec {
 	command: string;
@@ -48,6 +49,64 @@ export function runProcess(spec: ProcessSpec): Promise<ProcessResult> {
 		child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
 		child.stdin.on('error', () => undefined);
 		child.stdin.end(spec.input ?? '');
+	});
+}
+
+/** Runs `spec > file`: its output goes straight to `file` (binary-safe, e.g. a pg_dump archive). */
+export function runToFile(spec: ProcessSpec, file: string): Promise<ProcessResult> {
+	return new Promise((resolve, reject) => {
+		const child = spawnChild(spec);
+		const out = fs.createWriteStream(file);
+		let stderr = '';
+		let code: number | undefined;
+		let flushed = false;
+		const finish = () => {
+			if (code !== undefined && flushed) {
+				resolve({ code, stdout: '', stderr });
+			}
+		};
+		child.on('error', (error) => {
+			out.destroy();
+			reject(notFound(spec, error));
+		});
+		child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+		child.stdin.end();
+		child.stdout.pipe(out);
+		out.on('finish', () => {
+			flushed = true;
+			finish();
+		});
+		out.on('error', (error) => {
+			child.kill();
+			reject(error);
+		});
+		child.on('close', (exit) => {
+			code = exit ?? 1;
+			finish();
+		});
+	});
+}
+
+/** Runs `spec < file`: `file` is streamed into its stdin. */
+export function runFromFile(spec: ProcessSpec, file: string): Promise<ProcessResult> {
+	return new Promise((resolve, reject) => {
+		const child = spawnChild(spec);
+		const input = fs.createReadStream(file);
+		let stdout = '';
+		let stderr = '';
+		child.on('error', (error) => {
+			input.destroy();
+			reject(notFound(spec, error));
+		});
+		input.on('error', (error) => {
+			child.kill();
+			reject(error);
+		});
+		child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+		child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+		child.stdin.on('error', () => undefined);
+		input.pipe(child.stdin);
+		child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
 	});
 }
 

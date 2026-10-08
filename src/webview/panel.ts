@@ -1,18 +1,24 @@
-import type { PanelHostMessage, PanelMessage, PanelState, PanelTab } from '../shared/panelProtocol';
+import type { PanelHostMessage, PanelMessage, PanelState, PanelTab, Scope } from '../shared/panelProtocol';
 import {
 	databaseDraft,
 	databaseForm,
 	draftToScript,
 	emptyStep,
+	emptyStream,
+	initialScope,
+	migrationsDraft,
 	PanelUi,
+	matchingIcons,
+	renderIconGrid,
 	renderPanel,
 	scriptDraft,
 	serverDraft,
-	StepDraft,
 } from './panelRender';
 
 interface VsCodeApi {
 	postMessage(message: PanelMessage): void;
+	getState(): { migrationsOpen?: boolean } | undefined;
+	setState(state: { migrationsOpen?: boolean }): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -20,14 +26,25 @@ declare function acquireVsCodeApi(): VsCodeApi;
 const api = acquireVsCodeApi();
 const root = document.getElementById('app') as HTMLElement;
 let state: PanelState | undefined;
+/** The scope buttons were used; incoming state no longer picks the scope. */
+let scopeChosen = false;
 const ui: PanelUi = {
 	tab: (document.body.dataset.tab as PanelTab | undefined) ?? 'database',
+	scope: { database: 'local', servers: 'local', scripts: 'local' },
 	db: { engine: 'auto', source: 'envFile', envFile: '', urlVariable: '', url: '', runsIn: 'local', dockerName: '', sqliteFolder: '', mainBranches: '' },
 	dbDirty: false,
+	migrations: { command: '', cwd: '', onBranchChange: 'ask', afterCopy: true, streams: [] },
+	migrationsDirty: false,
+	iconSearch: '',
+	migrationsOpen: api.getState()?.migrationsOpen,
 };
 
 function post(message: PanelMessage): void {
 	api.postMessage(message);
+}
+
+function scope(): Scope {
+	return ui.scope[ui.tab];
 }
 
 function render(): void {
@@ -68,6 +85,8 @@ function bind(event: Event, rerender: boolean): void {
 	setPath(path, valueOf(element));
 	if (path.startsWith('db.')) {
 		ui.dbDirty = true;
+	} else if (path.startsWith('migrations.')) {
+		ui.migrationsDirty = true;
 	}
 	// Selects, radios and checkboxes change which fields show; text keeps focus while typing.
 	if (rerender) {
@@ -78,18 +97,25 @@ function bind(event: Event, rerender: boolean): void {
 root.addEventListener('input', (event) => {
 	const element = event.target as HTMLElement;
 	bind(event, false);
-	// The icon preview follows the name.
-	if (element.dataset.bind === 'editing.draft.icon') {
-		const preview = element.parentElement?.querySelector('.codicon');
-		if (preview) {
-			preview.className = `codicon codicon-${(element as HTMLInputElement).value.trim() || 'play'}`;
+	// Searching icons redraws only the grid, so the search box keeps focus and caret.
+	if (element.dataset.bind === 'iconSearch' && state && ui.editing?.kind === 'script') {
+		const grid = root.querySelector('.icon-grid');
+		if (grid) {
+			grid.innerHTML = renderIconGrid(state.icons, ui.iconSearch, ui.editing.draft.icon);
 		}
 	}
 });
+
 root.addEventListener('change', (event) => {
 	const element = event.target as HTMLInputElement;
 	if (element.dataset.action === 'include-launch') {
-		post({ type: 'setIncludeLaunch', value: element.checked });
+		post({ type: 'setIncludeLaunch', value: element.checked, scope: ui.scope.servers });
+		return;
+	}
+	if (element.dataset.action === 'pick' && ui.suggestions) {
+		const id = element.dataset.id ?? '';
+		ui.suggestions.picked = element.checked ? [...ui.suggestions.picked, id] : ui.suggestions.picked.filter((item) => item !== id);
+		render();
 		return;
 	}
 	bind(event, element.tagName === 'SELECT' || element.type === 'radio' || element.type === 'checkbox');
@@ -99,7 +125,7 @@ root.addEventListener('change', (event) => {
 
 root.addEventListener('click', (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
-	if (!target || target.hasAttribute('disabled') || target.dataset.action === 'include-launch') {
+	if (!target || target.hasAttribute('disabled') || target.dataset.action === 'include-launch' || target.dataset.action === 'pick') {
 		return;
 	}
 	event.preventDefault();
@@ -109,9 +135,17 @@ root.addEventListener('click', (event) => {
 root.addEventListener('keydown', (event) => {
 	// Enter in a single-line field saves the form it's in.
 	const element = event.target as HTMLElement;
+	if (element.dataset.bind === 'iconSearch' && (event.key === 'Enter' || event.key === 'Escape')) {
+		// Enter picks the first match; Escape closes the picker (not the form).
+		event.preventDefault();
+		const first = state ? matchingIcons(state.icons, ui.iconSearch)[0] : undefined;
+		act(event.key === 'Enter' && first ? 'pick-icon' : 'icon-toggle', { id: first });
+		return;
+	}
 	if (event.key === 'Enter' && element instanceof HTMLInputElement && element.type !== 'checkbox' && element.type !== 'radio') {
 		const form = element.closest<HTMLElement>('[data-form]')?.dataset.form;
-		act(form === 'script' ? 'save-script' : form === 'server' ? 'save-server' : ui.tab === 'database' ? 'save-db' : '', {});
+		const bound = element.dataset.bind ?? '';
+		act(form === 'script' ? 'save-script' : form === 'server' ? 'save-server' : bound.startsWith('migrations.') ? 'save-migrations' : bound.startsWith('db.') ? 'save-db' : '', {});
 	} else if (event.key === 'Escape' && ui.editing) {
 		act('cancel', {});
 	}
@@ -127,8 +161,15 @@ function act(action: string, data: DOMStringMap): void {
 			ui.tab = (data.id as PanelTab) ?? 'database';
 			ui.notice = undefined;
 			break;
+		case 'scope':
+			ui.scope[ui.tab] = data.id === 'global' ? 'global' : 'local';
+			scopeChosen = true;
+			break;
+		case 'reset':
+			post({ type: 'reset', tab: data.id as PanelTab });
+			return;
 		case 'save-db':
-			post({ type: 'saveDatabase', form: databaseForm(ui.db) });
+			post({ type: 'saveDatabase', form: databaseForm(ui.db), scope: ui.scope.database });
 			return;
 		case 'test-db':
 			post({ type: 'testConnection' });
@@ -139,9 +180,18 @@ function act(action: string, data: DOMStringMap): void {
 			ui.dbDirty = false;
 			ui.notice = undefined;
 			break;
-		case 'reset':
-			post({ type: 'reset', tab: data.id as PanelTab });
+		case 'detect':
+			post({ type: 'detect', tab: data.id === 'scripts' ? 'scripts' : 'servers' });
+			ui.notice = undefined;
 			return;
+		case 'add-suggestions':
+			if (ui.suggestions) {
+				post({ type: 'addSuggestions', ids: ui.suggestions.picked, tab: ui.suggestions.tab, scope: ui.scope[ui.suggestions.tab] });
+			}
+			return;
+		case 'close-suggestions':
+			ui.suggestions = undefined;
+			break;
 		case 'add-server':
 			ui.editing = { kind: 'server', draft: serverDraft() };
 			ui.notice = undefined;
@@ -154,12 +204,15 @@ function act(action: string, data: DOMStringMap): void {
 			break;
 		}
 		case 'delete-server':
-			post({ type: 'deleteServer', id: data.id ?? '' });
+			post({ type: 'deleteServer', id: data.id ?? '', scope: scope() });
 			return;
 		case 'save-server':
 			if (editing?.kind === 'server') {
-				post({ type: 'saveServer', originalId: editing.originalId, server: editing.draft });
+				post({ type: 'saveServer', originalId: editing.originalId, server: editing.draft, scope: scope() });
 			}
+			return;
+		case 'add-launch':
+			post({ type: 'addLaunch', name: data.id ?? '', scope: ui.scope.servers });
 			return;
 		case 'open-launch':
 			post({ type: 'open', target: 'launchJson' });
@@ -175,16 +228,27 @@ function act(action: string, data: DOMStringMap): void {
 			break;
 		}
 		case 'delete-script':
-			post({ type: 'deleteScript', id: data.id ?? '' });
+			post({ type: 'deleteScript', id: data.id ?? '', scope: scope() });
 			return;
 		case 'move-script':
-			post({ type: 'moveScript', id: data.id ?? '', delta: data.delta === '-1' ? -1 : 1 });
+			post({ type: 'moveScript', id: data.id ?? '', delta: data.delta === '-1' ? -1 : 1, scope: scope() });
 			return;
 		case 'save-script':
 			if (editing?.kind === 'script') {
-				post({ type: 'saveScript', originalId: editing.originalId, script: draftToScript(editing.draft, editing.originalId) });
+				post({ type: 'saveScript', originalId: editing.originalId, script: draftToScript(editing.draft, editing.originalId), scope: scope() });
 			}
 			return;
+		case 'icon-toggle':
+			ui.iconPicker = !ui.iconPicker;
+			ui.iconSearch = '';
+			break;
+		case 'pick-icon':
+			if (editing?.kind === 'script' && data.id) {
+				editing.draft.icon = data.id;
+			}
+			ui.iconPicker = false;
+			ui.iconSearch = '';
+			break;
 		case 'add-step':
 			if (editing?.kind === 'script') {
 				editing.draft.steps.push(emptyStep());
@@ -197,10 +261,36 @@ function act(action: string, data: DOMStringMap): void {
 			break;
 		case 'move-step':
 			if (editing?.kind === 'script') {
-				moveStep(editing.draft.steps, Number(data.index), Number(data.delta));
+				move(editing.draft.steps, Number(data.index), Number(data.delta));
 			}
 			break;
+		case 'add-stream':
+			ui.migrations.streams.push(emptyStream());
+			ui.migrationsDirty = true;
+			break;
+		case 'remove-stream':
+			ui.migrations.streams.splice(Number(data.index), 1);
+			ui.migrationsDirty = true;
+			break;
+		case 'migrations-open':
+		case 'migrations-close':
+			ui.migrationsOpen = action === 'migrations-open';
+			// Remembered when the panel is closed and opened again.
+			api.setState({ migrationsOpen: ui.migrationsOpen });
+			break;
+		case 'remove-migrations':
+			post({ type: 'removeMigrations', scope: ui.scope.scripts });
+			return;
+		case 'save-migrations':
+			post({ type: 'saveMigrations', migrations: ui.migrations, scope: ui.scope.scripts });
+			return;
+		case 'discard-migrations':
+			ui.migrations = migrationsDraft(state);
+			ui.migrationsDirty = false;
+			ui.notice = undefined;
+			break;
 		case 'cancel':
+			ui.iconPicker = false;
 			ui.editing = undefined;
 			ui.notice = undefined;
 			break;
@@ -210,10 +300,10 @@ function act(action: string, data: DOMStringMap): void {
 	render();
 }
 
-function moveStep(steps: StepDraft[], index: number, delta: number): void {
+function move<T>(items: T[], index: number, delta: number): void {
 	const target = index + delta;
-	if (target >= 0 && target < steps.length) {
-		[steps[index], steps[target]] = [steps[target], steps[index]];
+	if (target >= 0 && target < items.length) {
+		[items[index], items[target]] = [items[target], items[index]];
 	}
 }
 
@@ -226,8 +316,19 @@ window.addEventListener('message', (event: MessageEvent<PanelHostMessage>) => {
 		if (!ui.dbDirty) {
 			ui.db = databaseDraft(state);
 		}
+		if (!ui.migrationsDirty) {
+			ui.migrations = migrationsDraft(state);
+		}
+		if (!scopeChosen) {
+			ui.scope = initialScope(state);
+		}
 	} else if (message?.type === 'show') {
 		ui.tab = message.tab;
+	} else if (message?.type === 'suggestions') {
+		// New ones are ticked; ones already there aren't.
+		ui.suggestions = message.suggestions.length
+			? { tab: message.tab, items: message.suggestions, picked: message.suggestions.filter((item) => !item.exists).map((item) => item.id) }
+			: undefined;
 	} else if (message?.type === 'notice') {
 		ui.notice = message.notice;
 		if (message.saved) {
@@ -235,6 +336,11 @@ window.addEventListener('message', (event: MessageEvent<PanelHostMessage>) => {
 				ui.dbDirty = false;
 				if (state) {
 					ui.db = databaseDraft(state);
+				}
+			} else if (message.notice.area === 'migrations') {
+				ui.migrationsDirty = false;
+				if (state) {
+					ui.migrations = migrationsDraft(state);
 				}
 			} else {
 				ui.editing = undefined;

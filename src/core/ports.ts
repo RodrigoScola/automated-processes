@@ -22,6 +22,12 @@ export interface Ui {
 	pickMany<T>(items: PickItem<T>[], title: string, placeholder?: string): Promise<T[] | undefined>;
 	input(title: string, prompt: string, value: string, validate: (value: string) => string | undefined): Promise<string | undefined>;
 	withProgress<T>(title: string, task: () => Promise<T>): Promise<T>;
+	/** Save dialog; resolves with the chosen path. */
+	saveFile(title: string, defaultPath: string): Promise<string | undefined>;
+	/** Open dialog for one file, starting in `folder`. */
+	openFile(title: string, folder: string): Promise<string | undefined>;
+	/** Shows a file in the OS file manager. */
+	revealFile(file: string): void;
 }
 
 export interface GitPort {

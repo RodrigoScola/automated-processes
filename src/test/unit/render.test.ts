@@ -101,7 +101,7 @@ suite('renderApp', () => {
 		assert.match(html, /busy-bar/);
 		assert.match(html, /Settings need attention/);
 		assert.match(html, /data-command="startDatabase"/);
-		assert.match(html, /data-command="migrate" disabled/);
+		assert.match(html, /data-command="exportData" title="[^"]*" disabled/);
 		assert.ok(!html.includes('row-actions"><button'), 'row actions hidden while busy');
 	});
 
@@ -150,12 +150,60 @@ suite('renderApp', () => {
 		assert.ok(!/data-toggle="showAll"/.test(renderApp(state())), 'nothing more to show');
 	});
 
+	test('each sidebar view renders only its part', () => {
+		const servers: ViewServer[] = [{ id: 'web', label: 'Web', status: 'stopped', canRun: true, canDebug: false, restartOnDatabaseChange: false }];
+		const database = renderApp(state({ servers }), NOW, 'database');
+		assert.match(database, /Export Data/);
+		assert.ok(!/data-command="startServer"/.test(database) && !/data-run-script/.test(database));
+		assert.ok(!/section-header/.test(database), 'VS Code shows the view title');
+
+		const serverView = renderApp(state({ servers }), NOW, 'servers');
+		assert.match(serverView, /data-command="startServer" data-server="web"/);
+		assert.ok(!/Export Data|data-run-script/.test(serverView));
+		assert.match(renderApp(state(), NOW, 'servers'), /No servers yet/);
+
+		const scripts = renderApp(state(), NOW, 'scripts');
+		assert.match(scripts, /data-run-script="ci"/);
+		assert.match(scripts, /data-command="runMigrations"/);
+		assert.ok(!/data-command="startServer"/.test(scripts));
+
+		const options = renderApp(state(), NOW, 'options');
+		assert.match(options, /data-branch-mode/);
+		assert.ok(!/Export Data|data-run-script/.test(options));
+	});
+
+	test('every view shows something even with nothing configured', () => {
+		const empty = state({ scripts: [], hasMigrations: false, servers: [] });
+		const servers = renderApp(empty, NOW, 'servers');
+		assert.match(servers, /No servers yet/);
+		assert.match(servers, /data-command="configure" data-section="servers:detect">Add defaults/);
+		assert.match(servers, /data-section="servers">Add server/);
+		const scripts = renderApp(empty, NOW, 'scripts');
+		assert.match(scripts, /data-section="scripts:detect">Add defaults/);
+		assert.match(renderApp(empty, NOW, 'options'), /data-branch-mode/);
+
+		const noConnection = renderApp(state({ current: undefined, dbStatus: 'unknown', databases: [] }), NOW, 'database');
+		assert.match(noConnection, /No database connection yet/);
+		assert.match(noConnection, /data-section="database">Set up connection/);
+		assert.ok(!/Export Data/.test(noConnection));
+	});
+
+	test('without a folder, servers, scripts and settings still show', () => {
+		const noFolder = state({ hasWorkspace: false, current: undefined, scripts: [], hasMigrations: false });
+		assert.match(renderApp(noFolder, NOW, 'database'), /Open a folder/);
+		const servers = renderApp(noFolder, NOW, 'servers');
+		assert.match(servers, /Add server/);
+		assert.ok(!/Add defaults/.test(servers), 'nothing to detect without a folder');
+		assert.match(renderApp(noFolder, NOW, 'scripts'), /Add script/);
+		assert.match(renderApp(noFolder, NOW, 'options'), /data-branch-mode/);
+	});
+
 	test('section headers open the Configure panel on the right tab', () => {
 		const html = renderApp(state());
 		assert.match(html, /data-command="configure" data-section="database"/);
 		assert.match(html, /data-command="configure" data-section="servers"/);
 		assert.match(html, /data-command="configure" data-section="scripts"/);
-		assert.match(renderApp(state({ scripts: [], hasMigrations: false })), /data-section="scripts">Add a script/);
+		assert.match(renderApp(state({ scripts: [], hasMigrations: false })), /data-section="scripts">Add script/);
 	});
 
 	test('the footer has the import-data toggle below the branch-change mode', () => {
@@ -180,16 +228,17 @@ suite('renderApp', () => {
 		assert.match(html, /data-server-restart[\s\S]*<vscode-option value="ask" selected>ask/);
 	});
 
-	test('the footer shows the git-update mode only when a script is configured', () => {
+	test('the git-update setting moved into the scripts', () => {
 		assert.ok(!renderApp(state()).includes('data-git-update'));
-		const html = renderApp(state({ gitUpdate: { label: 'Update Dependencies', mode: 'ask' } }));
-		assert.match(html, /Restart server on database change[\s\S]*Update Dependencies automatically<\/span>\s*<vscode-single-select class="branch-mode" data-git-update/);
-		assert.match(html, /data-git-update[\s\S]*<vscode-option value="ask" selected>ask/);
 	});
 
-	test('the Export Data button replaces "Migrate"', () => {
+	test('the database view has New Database, Backup, Export Data and Import Data', () => {
 		const html = renderApp(state());
-		assert.match(html, /data-command="migrate">Export Data</);
+		assert.match(html, /data-command="newDatabase">New Database</);
+		assert.match(html, /data-command="backupDatabase"[^>]*>Backup</);
+		assert.match(html, /data-command="exportData"[^>]*>Export Data</);
+		assert.match(html, /data-command="importData"[^>]*>Import Data</);
+		assert.match(html, /data-command="backupDatabase" data-database="app_347"/);
 		assert.ok(!/>Migrate</.test(html));
 	});
 

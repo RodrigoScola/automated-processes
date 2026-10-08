@@ -2,12 +2,23 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { ExtensionMessage, ViewState, WebviewMessage } from '../shared/protocol';
 
+/** The Database view; the other sidebar views are listed in `SIDEBAR_VIEWS`. */
 export const SIDEBAR_VIEW_ID = 'automatedProcesses.sidebar';
+
+/** The sidebar's views, each a webview showing one part. VS Code gives them resizable dividers. */
+export const SIDEBAR_VIEWS = [
+	{ id: SIDEBAR_VIEW_ID, part: 'database' },
+	{ id: 'automatedProcesses.servers', part: 'servers' },
+	{ id: 'automatedProcesses.scripts', part: 'scripts' },
+	{ id: 'automatedProcesses.options', part: 'options' },
+] as const;
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
 
 	constructor(
+		/** Part of the state this view shows, e.g. `servers`. */
+		private readonly part: string,
 		private readonly extensionUri: vscode.Uri,
 		private readonly getState: () => ViewState,
 		private readonly onMessage: (message: WebviewMessage) => void,
@@ -60,7 +71,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	<link rel="stylesheet" href="${asset('styles.css')}">
 	<title>Automated Processes</title>
 </head>
-<body>
+<body data-part="${this.part}">
 	<div id="app"></div>
 	<script nonce="${nonce}" src="${asset('main.js')}"></script>
 </body>

@@ -3,7 +3,7 @@ import '@vscode-elements/elements/dist/vscode-checkbox/index.js';
 import '@vscode-elements/elements/dist/vscode-option/index.js';
 import '@vscode-elements/elements/dist/vscode-single-select/index.js';
 import type { BranchChangeMode, CommandName, ExtensionMessage, ViewState, WebviewMessage } from '../shared/protocol';
-import { renderApp } from './render';
+import { renderApp, SidebarPart } from './render';
 
 interface VsCodeApi {
 	postMessage(message: WebviewMessage): void;
@@ -13,6 +13,8 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 const api = acquireVsCodeApi();
 const root = document.getElementById('app') as HTMLElement;
+/** Which sidebar view this is (Database, Servers, Scripts or Settings). */
+const part = (document.body.dataset.part as SidebarPart | undefined) ?? 'all';
 let state: ViewState | undefined;
 let receivedAt = 0;
 
@@ -25,7 +27,7 @@ function render(): void {
 		return;
 	}
 	const now = state.now + (Date.now() - receivedAt);
-	root.innerHTML = renderApp(state, now);
+	root.innerHTML = renderApp(state, now, part);
 	bindInputs();
 }
 
@@ -43,9 +45,6 @@ function bindInputs(): void {
 	});
 	root.querySelectorAll<HTMLElement & { checked: boolean }>('vscode-checkbox[data-toggle="showAll"]').forEach((checkbox) => {
 		checkbox.addEventListener('change', () => post({ type: 'setShowAll', value: checkbox.checked }));
-	});
-	root.querySelectorAll<HTMLElement & { value: string }>('vscode-single-select[data-git-update]').forEach((select) => {
-		select.addEventListener('change', () => post({ type: 'setGitUpdateMode', value: select.value as BranchChangeMode }));
 	});
 	root.querySelectorAll<HTMLElement & { value: string }>('vscode-single-select[data-server-restart]').forEach((select) => {
 		select.addEventListener('change', () => post({ type: 'setServerRestartMode', value: select.value as 'restart' | 'ask' | 'off' }));
@@ -75,7 +74,7 @@ root.addEventListener('click', (event) => {
 			command: data.command as CommandName,
 			database: data.database,
 			server: data.server,
-			section: data.section as 'database' | 'servers' | 'scripts' | undefined,
+			section: data.section,
 		});
 	}
 });

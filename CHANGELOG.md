@@ -17,6 +17,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - launch.json `launch` configurations show up as servers, listed first
   (`server.includeLaunchConfigurations`).
 - The sidebar lists only the main and current database, with **Show all databases** for the rest.
+- The sidebar is four resizable, collapsible views: Database, Servers, Scripts and Settings.
+- Scripts and servers run in background terminals without taking focus (`revealTerminal`).
+- Configure panel: **Save for** this workspace or all workspaces; **Add defaults** detects servers,
+  scripts and migrations from package.json, Python projects and launch.json; launch.json
+  configurations are added one by one (**Add as server**; `server.includeLaunchConfigurations`
+  now defaults to off); a Migrations section for Run Migrations and Sync Migrations.
+- Servers, scripts and migrations can run in a subfolder (`cwd`, `migrations.cwd`).
 - New settings: `loadEnvFileIntoTerminals`, `applyToDebugSessions`, `echoCommands`,
   `database.autoStartContainer`, `database.warnIfPortExposed` (warns when the database container
   is reachable from the network).

@@ -62,4 +62,17 @@ export class VsCodeUi implements Ui {
 	async withProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
 		return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => task());
 	}
+
+	async saveFile(title: string, defaultPath: string): Promise<string | undefined> {
+		return (await vscode.window.showSaveDialog({ title, defaultUri: vscode.Uri.file(defaultPath), saveLabel: 'Export' }))?.fsPath;
+	}
+
+	async openFile(title: string, folder: string): Promise<string | undefined> {
+		const picked = await vscode.window.showOpenDialog({ title, defaultUri: vscode.Uri.file(folder), canSelectMany: false, openLabel: 'Import' });
+		return picked?.[0]?.fsPath;
+	}
+
+	revealFile(file: string): void {
+		void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(file));
+	}
 }

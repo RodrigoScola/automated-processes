@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { CurrentDatabase, databasesFreeAfterUnlink, findFinishedLinks, isMainBranch, resolveCurrent } from './branches';
 import { BranchChangeMode, Config, ConfigResult, MigrationStream, ScriptDefinition, ServerDefinition, ServerRestartMode } from './config';
@@ -6,6 +7,7 @@ import { parseDbUrl } from './dbUrl';
 import { EnvMap } from './envFile';
 import {
 	buildCommandEnv,
+	buildCommandEnvWithoutDatabase,
 	buildEnvAdditions,
 	engineKind,
 	MainDatabase,
@@ -42,6 +44,8 @@ export interface ControllerDeps {
 	createEngine(settings: EngineSettings): DatabaseEngine;
 	server: ServerControl;
 	processEnv: Record<string, string | undefined>;
+	/** Where backups go unless `database.backupFolder` is set (outside the repository). */
+	backupFolder(): string;
 	onDidChange(): void;
 	now?: () => number;
 }
@@ -95,11 +99,63 @@ export class Controller {
 			await this.startDatabase();
 		}
 		await this.checkFinishedBranches();
+		// Not awaited by activation: a long startup script mustn't hold up the extension.
+		this.startupRun = this.runStartupItems();
+	}
+
+	/** Resolves once the servers and scripts set to run on startup were started. */
+	startupRun: Promise<void> = Promise.resolve();
+
+	/** Servers with `runOnStartup`, then scripts with `runOn.startup`. */
+	private async runStartupItems(): Promise<void> {
+		const { config } = this.deps.readConfig();
+		for (const server of config.servers.filter((item) => item.runOnStartup)) {
+			if (server.command) {
+				await this.startServer(server.id);
+			} else if (server.debugConfiguration) {
+				await this.debugServer(server.id);
+			}
+		}
+		for (const script of config.scripts.filter((item) => item.runOn?.startup)) {
+			await this.runAutomatically(script, 'VS Code started');
+		}
+	}
+
+	/** Runs the scripts set to run when a file is saved (`files`: workspace-relative, with `/`). */
+	async onFilesSaved(files: string[]): Promise<void> {
+		const { config } = this.deps.readConfig();
+		for (const script of config.scripts.filter((item) => item.runOn?.fileSave)) {
+			const patterns = script.runOn?.fileSavePatterns ?? [];
+			// A pattern without "/" matches the file name in any folder.
+			const saved = files.find((file) => patterns.length === 0
+				|| patterns.some((pattern) => matchesGlob(file, pattern) || (!pattern.includes('/') && matchesGlob(file.split('/').pop() ?? file, pattern))));
+			if (saved) {
+				await this.runAutomatically(script, `${saved} was saved`);
+			}
+		}
+	}
+
+	/**
+	 * A script started by a trigger rather than its button. Skipped while something else runs, so
+	 * a burst of saves doesn't pile up runs; a failure is reported once.
+	 */
+	private async runAutomatically(script: ScriptDefinition, reason: string): Promise<void> {
+		if (this.deps.scripts.running || this.busy) {
+			return;
+		}
+		try {
+			const state = await this.runScriptDefinition(script, this.current?.database);
+			if (state.status === 'failed') {
+				void this.deps.ui.error(`${script.label} (run because ${reason}) failed. See the terminal for details.`);
+			}
+		} catch (error) {
+			void this.deps.ui.error(`${script.label}: ${messageOf(error)}`);
+		}
 	}
 
 	/**
 	 * Called when git state changes. Reacts to a branch switch, and to new commits on the same
-	 * branch (pull, merge, rebase) for `onGitUpdate`.
+	 * branch (pull, merge, rebase) for scripts that run on new commits.
 	 */
 	async onGitStateChanged(): Promise<void> {
 		if (!this.started) {
@@ -126,6 +182,12 @@ export class Controller {
 			await this.afterBranchSwitch(branch);
 		}
 		await this.restartServersIfPending();
+		if (previousBranch !== undefined && branch !== undefined) {
+			const { config } = this.deps.readConfig();
+			for (const script of config.scripts.filter((item) => item.runOn?.branchChange)) {
+				await this.runAutomatically(script, `the branch changed to "${branch}"`);
+			}
+		}
 	}
 
 	/** Re-reads settings, env files and the database list, then updates terminals and the view. */
@@ -294,9 +356,6 @@ export class Controller {
 			onBranchChange: config.migrations.onBranchChange,
 			importDataOnCreate: config.database.importDataOnCreate,
 			...this.serverView(config),
-			gitUpdate: ((script) => (script ? { label: script.label, mode: config.onGitUpdate.mode } : undefined))(
-				config.scripts.find((item) => item.id === config.onGitUpdate.script),
-			),
 			canStartDatabase: dockerTarget(config) !== undefined,
 			now: this.now(),
 		};
@@ -689,6 +748,142 @@ export class Controller {
 		});
 	}
 
+	// ── Backup, export and import ─────────────────────────────────────────────
+
+	/** Writes a copy of `name` (default: the current database) to the backup folder. */
+	async backupDatabase(name?: string): Promise<void> {
+		await this.guard('Backing up', async () => {
+			const ready = this.ready();
+			const database = name ?? this.current?.database ?? ready.main.name;
+			const file = await this.backupTo(ready, database);
+			this.offerReveal(`Backed up ${database} to ${file}.`, file);
+		});
+	}
+
+	/** Export Data: into another database (a copy), or to a file. */
+	async exportData(): Promise<void> {
+		const to = await this.deps.ui.pickOne<'database' | 'file'>([
+			{ label: '$(database) Another database', description: 'Replace it with a copy', value: 'database' },
+			{ label: '$(save) A file', description: 'A dump you can import later or hand to someone', value: 'file' },
+		], 'Export Data', 'Where to?');
+		if (to === 'database') {
+			await this.migrate();
+		} else if (to === 'file') {
+			await this.exportToFile();
+		}
+	}
+
+	/** Import Data into the current database: from another database (a copy), or from a file. */
+	async importData(): Promise<void> {
+		const target = this.current?.database;
+		const from = await this.deps.ui.pickOne<'database' | 'file'>([
+			{ label: '$(database) Another database', description: target ? `Copy it into ${target}` : 'Copy it into the current database', value: 'database' },
+			{ label: '$(folder-opened) A file', description: 'A backup or an exported dump', value: 'file' },
+		], 'Import Data', 'From where?');
+		if (from === 'database') {
+			await this.migrate({ target });
+		} else if (from === 'file') {
+			await this.importFromFile();
+		}
+	}
+
+	private async exportToFile(): Promise<void> {
+		await this.guard('Exporting data', async () => {
+			const ready = this.ready();
+			const databases = (await ready.engine.listDatabases()).filter((db) => !MAINTENANCE_DATABASES.includes(db));
+			const source = await this.deps.ui.pickOne(this.databaseItems(databases, ready, this.current?.database), 'Export Data: which database?');
+			if (!source) {
+				return;
+			}
+			const file = await this.deps.ui.saveFile(`Export ${source}`, path.join(this.backupFolder(ready), `${source}-${this.stamp()}${ready.engine.fileExtension}`));
+			if (!file) {
+				return;
+			}
+			await this.deps.ui.withProgress(`Exporting ${source}`, () => ready.engine.dumpToFile(source, file));
+			this.offerReveal(`Exported ${source} to ${file}.`, file);
+		});
+	}
+
+	/**
+	 * Replaces the current database with a file's contents. The database is backed up first, so
+	 * a wrong file (or a failed restore) can be undone by importing that backup.
+	 */
+	private async importFromFile(): Promise<void> {
+		await this.guard('Importing data', async () => {
+			const ready = this.ready();
+			const target = this.current?.database ?? ready.main.name;
+			const file = await this.deps.ui.openFile(`Import Data into ${target}`, this.backupFolder(ready));
+			if (!file) {
+				return;
+			}
+			const replace = await this.deps.ui.confirm(
+				`Replace ${target} with ${path.basename(file)}?`,
+				`Everything in ${target} is replaced, and apps connected to it are disconnected. A backup of ${target} is saved first.`,
+				'Replace',
+			);
+			if (!replace) {
+				return;
+			}
+			if (target === ready.main.name && !isMainBranch(ready.branch, ready.config.database.mainBranches)) {
+				const sure = await this.deps.ui.confirm(
+					'You are importing into the main database.',
+					`${ready.main.name} is the database the main branches use. All of it is replaced with ${path.basename(file)}. Are you sure?`,
+					'Yes, Import Into Main',
+				);
+				if (!sure) {
+					return;
+				}
+			}
+			const exists = (await ready.engine.listDatabases()).includes(target);
+			const backup = exists ? await this.backupTo(ready, target) : undefined;
+			await this.deps.ui.withProgress(`Importing ${path.basename(file)} into ${target}`, async () => {
+				if (exists) {
+					await ready.engine.drop(target);
+				}
+				await ready.engine.createEmpty(target);
+				try {
+					await ready.engine.restoreFromFile(file, target);
+				} catch (error) {
+					throw new UserError(`Import failed: ${messageOf(error)}${backup ? ` ${target} was backed up to ${backup} first; import that file to get it back.` : ''}`);
+				}
+			});
+			await this.deps.store.updateMeta(target, { lastCopiedFrom: path.basename(file), lastCopiedAt: new Date(this.now()).toISOString() });
+			await this.refresh();
+			if (ready.config.migrations.afterCopy && ready.config.migrations.command) {
+				await this.runMigrationsOn(target, true, true);
+			}
+			void this.deps.ui.info(`Imported ${path.basename(file)} into ${target}.${backup ? ` The previous data is in ${backup}.` : ''}`);
+		});
+	}
+
+	private async backupTo(ready: Ready, database: string): Promise<string> {
+		const folder = this.backupFolder(ready);
+		await fs.promises.mkdir(folder, { recursive: true });
+		const file = path.join(folder, `${database}-${this.stamp()}${ready.engine.fileExtension}`);
+		await this.deps.ui.withProgress(`Backing up ${database}`, () => ready.engine.dumpToFile(database, file));
+		return file;
+	}
+
+	/** `database.backupFolder` (relative to the workspace), else the extension's own storage. */
+	private backupFolder(ready: Ready): string {
+		const folder = ready.config.database.backupFolder;
+		return folder ? path.resolve(ready.root, folder) : this.deps.backupFolder();
+	}
+
+	/** `2026-10-08_14-03-22`, for file names. */
+	private stamp(): string {
+		return new Date(this.now()).toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-');
+	}
+
+	/** A notification with "Show in Folder"; not awaited, so the action that wrote the file finishes. */
+	private offerReveal(message: string, file: string): void {
+		void this.deps.ui.info(message, 'Show in Folder').then((choice) => {
+			if (choice === 'Show in Folder') {
+				this.deps.ui.revealFile(file);
+			}
+		});
+	}
+
 	// ── Scripts ───────────────────────────────────────────────────────────────
 
 	async runMigrations(): Promise<void> {
@@ -838,7 +1033,7 @@ export class Controller {
 				throw new UserError(`"${server.label}" has no command; it can only be debugged.`);
 			}
 			await this.stopDebugSessionOf(server);
-			await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+			await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), inFolder(this.requireRoot(), server.cwd));
 		} catch (error) {
 			void this.deps.ui.error(messageOf(error));
 		}
@@ -956,7 +1151,7 @@ export class Controller {
 			const terminals = new Set(this.deps.server.runningServers());
 			for (const server of config.servers) {
 				if (terminals.has(server.id) && server.command && (server.restartOnDatabaseChange || !onlyDatabaseDependent)) {
-					await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), this.readyWithoutEngine().root);
+					await this.deps.server.startServer(server.id, server.label, server.command, this.currentCommandEnv(), inFolder(this.requireRoot(), server.cwd));
 					restarted.push(server.label);
 				}
 			}
@@ -986,6 +1181,10 @@ export class Controller {
 	}
 
 	private currentCommandEnv(): EnvMap {
+		const without = this.withoutDatabase();
+		if (without) {
+			return buildCommandEnvWithoutDatabase({ processEnv: this.deps.processEnv, config: without.config, env: without.env, branch: without.branch });
+		}
 		const ready = this.readyWithoutEngine();
 		const database = this.current?.database ?? ready.main.name;
 		return buildCommandEnv({
@@ -1040,39 +1239,26 @@ export class Controller {
 
 	// ── Internals ─────────────────────────────────────────────────────────────
 
-	/** The branch got new commits (pull, merge, rebase): run the `onGitUpdate` script if it applies. */
+	/** The branch got new commits (pull, merge, rebase): run the scripts set to run then. */
 	private async afterBranchUpdated(branch: string, from: string, to: string): Promise<void> {
 		const { config } = this.deps.readConfig();
-		const settings = config.onGitUpdate;
-		const script = config.scripts.find((item) => item.id === settings.script);
-		if (!script || settings.mode === 'off' || (settings.skipMainBranches && isMainBranch(branch, config.database.mainBranches))) {
+		const legacy = config.onGitUpdate;
+		const scripts = config.scripts.filter((script) => script.runOn?.gitUpdate
+			&& !(script.id === legacy.script && legacy.skipMainBranches && isMainBranch(branch, config.database.mainBranches)));
+		if (scripts.length === 0) {
 			return;
 		}
-		let reason = 'it has new commits';
-		if (settings.whenFilesChange.length > 0) {
-			const changed = (await this.deps.git.changedFiles(from, to).catch(() => []))
-				.filter((file) => matchesAnyGlob(file, settings.whenFilesChange));
-			if (changed.length === 0) {
-				return;
+		const changedFiles = await this.deps.git.changedFiles(from, to).catch(() => []);
+		for (const script of scripts) {
+			const patterns = script.runOn?.gitUpdatePatterns ?? [];
+			const changed = changedFiles.filter((file) => matchesAnyGlob(file, patterns));
+			if (patterns.length > 0 && changed.length === 0) {
+				continue;
 			}
-			reason = `${changed.join(', ')} changed`;
+			const reason = patterns.length ? `${changed.join(', ')} changed` : `"${branch}" got new commits`;
+			void this.deps.ui.info(`${reason}: running ${script.label}…`);
+			await this.runAutomatically(script, reason);
 		}
-		if (settings.mode === 'ask') {
-			const choice = await this.deps.ui.info(`"${branch}" was updated and ${reason}. Run ${script.label}?`, `Run ${script.label}`);
-			if (choice !== `Run ${script.label}`) {
-				return;
-			}
-		} else {
-			void this.deps.ui.info(`"${branch}" was updated and ${reason}. Running ${script.label}…`);
-		}
-		const state = await this.runScript(script.id);
-		if (state?.status === 'failed') {
-			void this.deps.ui.error(`${script.label} failed. See the terminal for details.`);
-		}
-	}
-
-	async setGitUpdateMode(value: BranchChangeMode): Promise<void> {
-		await this.deps.settings.update('onGitUpdate.mode', value);
 	}
 
 	private async afterBranchSwitch(branch: string): Promise<void> {
@@ -1122,7 +1308,7 @@ export class Controller {
 			}
 		}
 		const state = await this.runScriptDefinition(
-			{ id: MIGRATIONS_SCRIPT_ID, label: 'Run Migrations', icon: 'arrow-up', env: {}, inputs: {}, steps: [{ label: `Migrations on ${database}`, run: config.migrations.command }] },
+			{ id: MIGRATIONS_SCRIPT_ID, label: 'Run Migrations', icon: 'arrow-up', cwd: config.migrations.cwd, env: {}, inputs: {}, steps: [{ label: `Migrations on ${database}`, run: config.migrations.command }] },
 			database,
 		);
 		if (state.status === 'failed') {
@@ -1134,14 +1320,28 @@ export class Controller {
 	}
 
 	private async runScriptDefinition(script: ScriptDefinition, database: string | undefined, step?: number): Promise<RunState> {
-		const ready = this.readyWithoutEngine();
-		const db = database ?? ready.main.name;
-		const isMain = db === ready.main.name;
 		const stored = this.deps.prefs.get<Record<string, Record<string, string>>>(PREF_INPUTS)?.[script.id] ?? {};
 		const inputs: Record<string, string> = {};
 		for (const [name, input] of Object.entries(script.inputs)) {
 			inputs[name] = stored[name] && input.options.includes(stored[name]) ? stored[name] : input.default;
 		}
+		// Scripts don't need a database; migrations (which name one) do.
+		const without = database === undefined ? this.withoutDatabase() : undefined;
+		if (without) {
+			const env = buildCommandEnvWithoutDatabase({
+				processEnv: this.deps.processEnv,
+				config: without.config,
+				env: without.env,
+				branch: without.branch,
+				scriptEnv: script.env,
+				inputs,
+			});
+			const context = { env: { ...this.deps.processEnv, ...without.env?.main }, inputs, branch: without.branch };
+			return this.deps.scripts.run(script, { env, cwd: inFolder(without.root, script.cwd), context, onlyStep: step });
+		}
+		const ready = this.readyWithoutEngine();
+		const db = database ?? ready.main.name;
+		const isMain = db === ready.main.name;
 		const env = buildCommandEnv({
 			processEnv: this.deps.processEnv,
 			config: ready.config,
@@ -1153,7 +1353,7 @@ export class Controller {
 			inputs,
 		});
 		const context = placeholderContext(ready.config, ready.env, this.deps.processEnv, db, isMain, ready.branch, inputs);
-		return this.deps.scripts.run(script, { env, cwd: ready.root, context, onlyStep: step });
+		return this.deps.scripts.run(script, { env, cwd: inFolder(ready.root, script.cwd), context, onlyStep: step });
 	}
 
 	/**
@@ -1254,6 +1454,31 @@ export class Controller {
 		return existing.filter((db) => db === base || matchesGlob(db, `${base}_*`));
 	}
 
+	private requireRoot(): string {
+		const root = this.deps.root();
+		if (!root) {
+			throw new UserError('Open a folder first.');
+		}
+		return root;
+	}
+
+	/**
+	 * What a script or server needs when there's no database to point at (no URL, no env file),
+	 * or undefined when there is one. Throws when no folder is open.
+	 */
+	private withoutDatabase(): { config: Config; root: string; env: ProjectEnv | undefined; branch: string | undefined } | undefined {
+		const root = this.requireRoot();
+		const { config } = this.deps.readConfig();
+		let env: ProjectEnv | undefined;
+		try {
+			env = this.deps.readEnv(root, config);
+			mainDatabase(config, env);
+			return undefined;
+		} catch {
+			return { config, root, env, branch: this.deps.git.currentBranch() };
+		}
+	}
+
 	private readyWithoutEngine(): Omit<Ready, 'engine'> {
 		const root = this.deps.root();
 		if (!root) {
@@ -1343,6 +1568,11 @@ function dockerTarget(config: Config): { kind: 'container' | 'compose'; name: st
 		return { kind: 'compose', name: config.database.dockerComposeService };
 	}
 	return undefined;
+}
+
+/** `folder` (relative to the workspace) as an absolute path; the workspace itself when empty. */
+function inFolder(root: string, folder: string | undefined): string {
+	return folder ? path.resolve(root, folder) : root;
 }
 
 function uniqueName(name: string, existing: Set<string>): string {
