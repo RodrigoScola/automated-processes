@@ -12,6 +12,7 @@ import {
 	engineKind,
 	MainDatabase,
 	mainDatabase,
+	NoDatabaseError,
 	placeholderContext,
 	ProjectEnv,
 	testDatabaseFor,
@@ -19,6 +20,7 @@ import {
 import { matchesAnyGlob, matchesGlob } from './glob';
 import { suggestDatabaseName, testDatabaseName, validateDatabaseName } from './names';
 import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from './ports';
+import { DockerControl } from './docker';
 import { DatabaseEngine, isContainerStopped, isDockerDown, isTemplateInUse, isToolMissing } from './postgres';
 import { RunState, ScriptRunner } from './scriptRunner';
 import { EngineSettings, sqliteFilePath } from './sqlite';
@@ -44,6 +46,8 @@ export interface ControllerDeps {
 	createEngine(settings: EngineSettings): DatabaseEngine;
 	server: ServerControl;
 	processEnv: Record<string, string | undefined>;
+	/** Starts Docker Desktop for the "Docker isn't running" warning. */
+	docker: DockerControl;
 	/** Where backups go unless `database.backupFolder` is set (outside the repository). */
 	backupFolder(): string;
 	onDidChange(): void;
@@ -210,7 +214,10 @@ export class Controller {
 			env = this.deps.readEnv(root, config);
 			main = mainDatabase(config, env);
 		} catch (error) {
-			this.problems.push(messageOf(error));
+			// No database URL is a normal setup (a project without a database), not a problem.
+			if (!(error instanceof NoDatabaseError)) {
+				this.problems.push(messageOf(error));
+			}
 			this.databases = [];
 			this.dbStatus = 'unknown';
 			this.deps.envSink.apply(undefined, { terminals: false, debugSessions: false, description: '' });
@@ -390,8 +397,8 @@ export class Controller {
 			const docker = dockerTarget(config);
 			if (docker && this.dockerProblem === 'dockerDown') {
 				warnings.push({
-					message: 'Docker isn\'t running. Start Docker, then retry.',
-					action: { label: 'Retry', command: 'connectDatabase' },
+					message: 'Docker isn\'t running.',
+					action: { label: 'Start Docker', command: 'startDocker', primary: true },
 				});
 			} else if (docker && this.dockerProblem === 'containerStopped') {
 				warnings.push({
@@ -422,7 +429,7 @@ export class Controller {
 				action: { label: 'New Database', command: 'newDatabase' },
 			});
 		}
-		if (this.started && branch === undefined && this.deps.root()) {
+		if (this.started && branch === undefined && this.current) {
 			warnings.push({ message: 'No git branch (detached HEAD or no repository). Using the main database.' });
 		}
 		return warnings;
@@ -712,6 +719,24 @@ export class Controller {
 			// Database or git unavailable; try again on the next git change.
 		} finally {
 			this.checkingBranches = false;
+		}
+	}
+
+	/**
+	 * Launches Docker Desktop, waits for its engine, then connects again (which also starts the
+	 * database container, unless `database.autoStartContainer` is off).
+	 */
+	async startDocker(): Promise<void> {
+		let started = false;
+		await this.guard('Starting Docker', async () => {
+			await this.deps.docker.startDesktop();
+			started = await this.deps.ui.withProgress('Waiting for Docker to start…', () => this.deps.docker.waitUntilRunning(120_000));
+			if (!started) {
+				throw new UserError('Docker didn\'t start within 2 minutes. Once it\'s running, press Refresh.');
+			}
+		});
+		if (started) {
+			await this.connectDatabase();
 		}
 	}
 

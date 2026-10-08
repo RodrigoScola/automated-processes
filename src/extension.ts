@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { Config } from './core/config';
 import { Controller } from './core/controller';
+import { DockerDesktop } from './core/docker';
 import { readEnvFile } from './core/envFile';
 import { ProjectEnv } from './core/environment';
 import { PostgresEngine } from './core/postgres';
@@ -52,6 +53,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		server,
 		processEnv: process.env,
 		// Backups hold real data, so by default they stay out of the repository.
+		docker: new DockerDesktop(process.env),
 		backupFolder: () => path.join(context.globalStorageUri.fsPath, 'backups'),
 		onDidChange: () => notify(),
 	});
@@ -126,16 +128,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	}
 
 	await controller.start();
+	void showViewsOnce(context);
 	return controller;
 }
 
 export function deactivate(): void {}
 
+const VIEWS_SHOWN_KEY = 'automatedProcesses.viewsShownFor';
+
+/**
+ * Once per version, shows every sidebar view: VS Code remembers the layout of the container from
+ * before views were added (e.g. the single view of older versions), which can keep new ones hidden.
+ */
+async function showViewsOnce(context: vscode.ExtensionContext): Promise<void> {
+	const version = String(context.extension.packageJSON.version ?? '');
+	if (context.globalState.get<string>(VIEWS_SHOWN_KEY) === version) {
+		return;
+	}
+	await context.globalState.update(VIEWS_SHOWN_KEY, version);
+	// Opening a view makes it visible again; the Database view goes last so it keeps focus.
+	for (const view of [...SIDEBAR_VIEWS].reverse()) {
+		await vscode.commands.executeCommand(`${view.id}.focus`).then(undefined, () => undefined);
+	}
+}
+
 function readEnv(root: string, config: Config): ProjectEnv {
 	const main = readEnvFile(root, config.envFile);
 	if (!main) {
-		// With a URL entered in the Configure panel, the env file is optional.
-		if (config.database.url) {
+		// The env file is optional with a URL entered in the Configure panel, and when it's the
+		// default `.env` (a project without one simply has no database).
+		if (config.database.url || config.envFile === '.env') {
 			return { main: {}, test: config.testDatabase.envFile ? readEnvFile(root, config.testDatabase.envFile) ?? {} : {} };
 		}
 		throw new Error(`${config.envFile} not found in ${path.basename(root)}.`);
@@ -174,6 +196,7 @@ function registerCommands(controller: Controller, executor: TaskExecutor, panel:
 		},
 		startDatabase: () => controller.startDatabase(),
 		connectDatabase: () => controller.connectDatabase(),
+		startDocker: () => controller.startDocker(),
 		startServer: async (id?: unknown) => withServer(controller, id, 'Run which server?', (server) => controller.startServer(server)),
 		debugServer: async (id?: unknown) => withServer(controller, id, 'Debug which server?', (server) => controller.debugServer(server)),
 		stopServer: async (id?: unknown) => withServer(controller, id, 'Stop which server?', (server) => controller.stopServer(server)),

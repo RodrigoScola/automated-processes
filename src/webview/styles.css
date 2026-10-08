@@ -19,6 +19,8 @@ body {
 	background: var(--vscode-sideBar-background);
 	font-family: var(--vscode-font-family);
 	font-size: var(--vscode-font-size);
+	/* Long names truncate; a narrow sidebar never scrolls sideways. */
+	overflow-x: hidden;
 }
 
 #app {
@@ -502,4 +504,9 @@ code {
 	.codicon-modifier-spin {
 		animation: none !important;
 	}
+}
+
+/* A highlighted action under a banner's message, e.g. Start Docker. */
+.banner-action {
+	margin-top: 6px;
 }

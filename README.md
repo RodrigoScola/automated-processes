@@ -6,8 +6,13 @@ project-specific is a setting, edited in the **Configure** panel or as `automate
 `settings.json`.
 
 - **Per-branch databases.** `New Database` copies the main database for the current branch and
-  runs migrations on it. Switching branches switches the database. **Export Data** copies any
-  database into any other. Databases of merged branches are dropped (or kept, by setting).
+  runs migrations on it. Switching branches switches the database. Databases of merged branches
+  are dropped (or kept, by setting).
+- **Backup, export, import.** **Backup** saves a database to a file. **Export Data** copies a
+  database into another one or to a file; **Import Data** replaces the current one with another
+  database or a file, after backing it up. Files are `pg_dump` archives (PostgreSQL) or database
+  files (SQLite). Backups go to the extension's storage, outside the repository, unless
+  `database.backupFolder` says otherwise.
 - **No `.env` editing.** The current database is passed to scripts, new terminals and debug
   sessions as environment variables, which override `.env` in most frameworks.
 - **Works on Windows.** With `loadEnvFileIntoCommands` (on by default), every value from `.env` is
@@ -25,6 +30,12 @@ Four views, each with its own title bar buttons: **Database**, **Servers** (run,
 stop), **Scripts** (with Run Migrations and Sync Migrations) and **Settings** (the
 on-branch-change and restart options; collapsed at the bottom). Drag the dividers to resize them,
 collapse the ones you don't need, or drag them to reorder.
+
+Scripts can also run by themselves: when VS Code starts, when the branch changes, when the branch
+gets new commits (pull, merge, rebase; optionally only when e.g. `package-lock.json` changed, for
+updating dependencies) or when a file is saved (optionally only e.g. `*.py`). All off by default;
+an automatic run is skipped while another script runs. Servers can start with VS Code. Scripts and
+servers also run when there's no database connection, just without the database variables.
 
 Scripts and servers run in background terminals: the terminal panel and focus stay where they
 are. Their **output** links (or `revealTerminal`) show them.
@@ -44,8 +55,8 @@ Scripts**) open an editor tab with three tabs:
 - **Servers:** add, edit and delete servers (name, run command, folder, launch.json configuration
   to debug with, restart on database change). The launch.json list has **Add as server** for each
   configuration.
-- **Scripts:** add, edit, reorder and delete scripts and their steps, folder, variables and
-  dropdowns. Below them, **Migrations**: the Run Migrations command and folder, when it runs, and
+- **Scripts:** add, edit, reorder and delete scripts: icon (searchable picker over every codicon),
+  steps, folder, when they run by themselves, variables and dropdowns. Below them, **Migrations**: the Run Migrations command and folder, when it runs, and
   the histories Sync Migrations reverts.
 
 **Add defaults** (Servers and Scripts) looks at the project and its direct subfolders and offers
@@ -90,6 +101,7 @@ your machine and override the same keys from `settings.json`; nothing in the rep
 | `database.mainBranches` | `["main"]` | Branches that use the main database |
 | `database.dockerContainer` | `""` | Run Postgres tools in this container (`docker exec`) |
 | `database.dockerComposeService` | `""` | Or in this Compose service (`docker compose exec`) |
+| `database.backupFolder` | `""` | Backups and default export/import folder, relative to the workspace; empty = the extension's storage |
 | `database.autoStartContainer` | `true` | Start a stopped database container on startup and Retry without asking |
 | `database.warnIfPortExposed` | `true` | Warn when the container publishes its port on every network interface |
 | `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
@@ -106,10 +118,7 @@ your machine and override the same keys from `settings.json`; nothing in the rep
 | `migrations.streams` | `[]` | Migration histories for **Sync Migrations** (see below) |
 | `servers` | `[]` | Servers in the sidebar (`label`, `command`, `cwd`, `debugConfiguration`, `restartOnDatabaseChange`), each with run, debug, restart and stop |
 | `server.command` | `""` | Single-server shortcut, used only when `servers` is empty |
-| `onGitUpdate.script` | `""` | Script to run when the branch gets new commits (pull, merge, rebase) |
-| `onGitUpdate.mode` | `always` | `always` / `ask` / `off` |
-| `onGitUpdate.whenFilesChange` | `[]` | Only when these files changed (e.g. `uv.lock`, `package-lock.json`) |
-| `onGitUpdate.skipMainBranches` | `false` | Don't run it on the main branches |
+| `onGitUpdate.*` | | Older way to run a script on new commits; read as that script's `runOn.gitUpdate` (+ `gitUpdatePatterns`) |
 | `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
 | `server.includeLaunchConfigurations` | `false` | Show every launch.json `launch` configuration as a server without adding it |
 | `scripts` | `[]` | Sidebar script buttons |

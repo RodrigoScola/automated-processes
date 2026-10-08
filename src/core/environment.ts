@@ -12,6 +12,9 @@ export interface ProjectEnv {
 	test: EnvMap;
 }
 
+/** The project has no database URL at all: fine for projects without a database. */
+export class NoDatabaseError extends Error {}
+
 export interface MainDatabase {
 	name: string;
 	url: string;
@@ -26,7 +29,7 @@ export function mainDatabase(config: Config, env: ProjectEnv): MainDatabase {
 	const url = config.database.url || (variable ? env.main[variable] : undefined);
 	const source = config.database.url ? 'The connection URL' : `${variable} in ${config.envFile}`;
 	if (!url) {
-		throw new Error(`${variable ?? 'The database URL variable'} is not set in ${config.envFile}.`);
+		throw new NoDatabaseError(`${variable ?? 'The database URL variable'} is not set in ${config.envFile}.`);
 	}
 	const sqlite = isSqliteUrl(url);
 	if (config.database.engine === 'sqlite' && !sqlite) {

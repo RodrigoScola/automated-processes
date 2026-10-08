@@ -183,7 +183,7 @@ suite('renderApp', () => {
 		assert.match(renderApp(empty, NOW, 'options'), /data-branch-mode/);
 
 		const noConnection = renderApp(state({ current: undefined, dbStatus: 'unknown', databases: [] }), NOW, 'database');
-		assert.match(noConnection, /No database connection yet/);
+		assert.match(noConnection, /No database connection\./);
 		assert.match(noConnection, /data-section="database">Set up connection/);
 		assert.ok(!/Export Data/.test(noConnection));
 	});

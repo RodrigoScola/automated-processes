@@ -2,6 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Config, ConfigResult, DEFAULT_CONFIG } from '../../core/config';
 import { Controller } from '../../core/controller';
+import { DockerControl } from '../../core/docker';
 import { EnvMap } from '../../core/envFile';
 import { ProjectEnv } from '../../core/environment';
 import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from '../../core/ports';
@@ -222,6 +223,20 @@ export class FakeEngine implements DatabaseEngine {
 	}
 }
 
+export class FakeDocker implements DockerControl {
+	started = 0;
+	/** What waitUntilRunning answers. */
+	comesUp = true;
+	onStart: () => void = () => undefined;
+	async startDesktop() {
+		this.started++;
+		this.onStart();
+	}
+	async waitUntilRunning() {
+		return this.comesUp;
+	}
+}
+
 export class FakeExecutor implements CommandExecutor {
 	readonly requests: CommandRequest[] = [];
 	exitCode: (request: CommandRequest) => number = () => 0;
@@ -346,6 +361,7 @@ export interface Harness {
 	settings: FakeSettings;
 	engineSettings: ClientSettings[];
 	engineKinds: string[];
+	docker: FakeDocker;
 	config: Config;
 	env: ProjectEnv;
 	changes: number;
@@ -366,6 +382,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 		settings: new FakeSettings(),
 		engineSettings: [],
 		engineKinds: [],
+		docker: new FakeDocker(),
 		config: options.config ?? testConfig({ migrations: { command: 'migrate up' } }),
 		env: { main: { DATABASE_URL: MAIN_URL, OTHER: 'x' }, test: {}, ...options.env },
 		changes: 0,
@@ -392,6 +409,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 			return h.engine;
 		},
 		processEnv: { PATH: '/bin' },
+		docker: h.docker,
 		backupFolder: () => BACKUP_FOLDER,
 		onDidChange: () => h.changes++,
 		now: () => Date.parse('2026-10-01T12:00:00Z'),

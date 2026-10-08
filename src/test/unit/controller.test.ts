@@ -89,23 +89,33 @@ suite('Controller: refresh and view state', () => {
 		assert.deepStrictEqual(h.controller.snapshot().warnings.filter((warning) => warning.action?.command === 'connectDatabase'), []);
 	});
 
-	test('when Docker itself is down, nothing is started and Retry checks again', async () => {
+	test('when Docker itself is down, Start Docker launches it, then starts the container', async () => {
 		const h = harness({ config: testConfig({ database: { dockerContainer: 'carli-db-1' } }) });
 		h.engine.failListing = new Error('docker failed (exit code 1): error during connect: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.');
 		await h.controller.start();
 		assert.strictEqual(h.executor.requests.length, 0);
-		const warning = h.controller.snapshot().warnings.find((item) => item.action?.command === 'connectDatabase');
+		const warning = h.controller.snapshot().warnings.find((item) => item.action?.command === 'startDocker');
 		assert.match(warning?.message ?? '', /Docker isn't running/);
+		assert.strictEqual(warning?.action?.primary, true, 'a highlighted button');
 
-		// Docker is up now, but the container is still stopped: Retry starts it.
-		h.engine.failListing = new Error('container carli-db-1 is not running');
+		// Docker comes up, but the container is still stopped: it's started too.
+		h.docker.onStart = () => (h.engine.failListing = new Error('container carli-db-1 is not running'));
 		h.executor.exitCode = () => {
 			h.engine.failListing = undefined;
 			return 0;
 		};
-		await h.controller.connectDatabase();
+		await h.controller.startDocker();
+		assert.strictEqual(h.docker.started, 1);
 		assert.strictEqual(h.executor.requests[0].command, 'docker start carli-db-1');
 		assert.strictEqual(h.controller.snapshot().dbStatus, 'ok');
+	});
+
+	test('Start Docker says so when Docker doesn\'t come up', async () => {
+		const h = harness({ config: testConfig({ database: { dockerContainer: 'carli-db-1' } }) });
+		h.docker.comesUp = false;
+		await h.controller.startDocker();
+		assert.match(h.ui.messages('error')[0], /didn't start within 2 minutes/);
+		assert.strictEqual(h.executor.requests.length, 0);
 	});
 
 	test('other database errors with Docker keep the Start Database action', async () => {
@@ -159,11 +169,12 @@ suite('Controller: refresh and view state', () => {
 		assert.strictEqual(h.controller.snapshot().canStartDatabase, false);
 	});
 
-	test('a missing env variable is a problem and clears the environment', async () => {
+	test('no database URL is fine: no problem, no database, no environment', async () => {
 		const h = harness({ env: { main: {} } });
 		await h.controller.start();
 		const state = h.controller.snapshot();
-		assert.ok(state.problems.some((problem) => problem.includes('DATABASE_URL is not set')));
+		assert.deepStrictEqual(state.problems, []);
+		assert.deepStrictEqual(state.warnings, [], 'no "using the main database" warning without a database');
 		assert.strictEqual(state.current, undefined);
 		assert.strictEqual(h.envSink.last?.additions, undefined);
 	});
@@ -871,7 +882,6 @@ suite('Controller: scripts that run by themselves', () => {
 			}),
 		});
 		await h.controller.start();
-		assert.ok(h.controller.snapshot().problems.some((problem) => /DATABASE_URL is not set/.test(problem)));
 		const state = await h.controller.runScript('lint');
 		assert.strictEqual(state?.status, 'passed');
 		assert.strictEqual(h.executor.requests[0].env.WHERE, 'feature/login');

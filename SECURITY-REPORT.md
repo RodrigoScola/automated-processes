@@ -90,6 +90,9 @@ The strictest setup, in user settings:
   workspace storage on this machine, never in the repository. A connection URL typed there goes
   to VS Code's secret storage (the OS keychain), and the panel only ever shows it with the
   password hidden.
+- Backups and exports hold real data. **Backup** writes to the extension's storage on this
+  machine by default, never the repository; a `database.backupFolder` inside the repository
+  should be in `.gitignore`.
 - Terminal variables are not persisted (`environmentVariableCollection.persistent = false`), so
   `.env` values aren't written to VS Code's storage. Branch links in workspace storage hold no
   secrets.

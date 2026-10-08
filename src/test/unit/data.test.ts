@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { DEFAULT_CONFIG, readConfig } from '../../core/config';
+import { dockerDesktopLaunch } from '../../core/docker';
 import { panelState, upsertScript } from '../../core/editor';
 import { ClientSettings, PostgresEngine } from '../../core/postgres';
 import { ProcessSpec, runFromFile, runToFile } from '../../core/process';
@@ -90,6 +91,14 @@ suite('Backup, export and import', () => {
 		await h.controller.importData();
 		assert.ok(h.ui.messages('confirm').some((message) => /importing into the main database/.test(message)));
 		assert.ok(!h.engine.calls.some((item) => item.startsWith('drop') || item.startsWith('dumpToFile')));
+	});
+});
+
+suite('Docker Desktop', () => {
+	test('starts the right way on each OS', () => {
+		assert.deepStrictEqual(dockerDesktopLaunch('win32', { ProgramFiles: 'D:\\Apps' }), { command: 'D:\\Apps\\Docker\\Docker\\Docker Desktop.exe', args: [] });
+		assert.deepStrictEqual(dockerDesktopLaunch('darwin', {}), { command: 'open', args: ['-a', 'Docker'] });
+		assert.deepStrictEqual(dockerDesktopLaunch('linux', {}), { command: 'systemctl', args: ['--user', 'start', 'docker-desktop'] });
 	});
 });
 

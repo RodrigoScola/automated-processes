@@ -9,6 +9,9 @@ const TASK_ID_PREFIX = 'server:';
 const DEBUG_OPTIONS: vscode.DebugSessionOptions = { suppressDebugView: true };
 /** How long after a launch a newly focused debug terminal gives focus back. */
 const FOCUS_GUARD_MS = 5000;
+/** How long after a debug launch (or its terminal opening) the Servers view takes focus back. */
+const REFOCUS_DELAY_MS = 500;
+const SERVERS_VIEW_ID = 'automatedProcesses.servers';
 
 /**
  * Runs each server as a background task (so its exit is known and it can be stopped), and tracks
@@ -172,20 +175,28 @@ function launchConfigurationNames(folder: vscode.WorkspaceFolder | undefined): s
 }
 
 /**
- * Runs a debug launch, and when it opens a terminal (`"console": "integratedTerminal"`) that takes
- * focus, puts focus back on the editor. The terminal stays open in the panel.
+ * Runs a debug launch, then gives focus back to the Servers view: VS Code focuses the debug
+ * terminal (`"console": "integratedTerminal"`) or console itself, so shortly after the launch,
+ * and after any terminal it opens, the sidebar takes focus again. The terminal stays in the panel.
  */
 async function withoutTerminalFocus<T>(launch: () => Thenable<T>): Promise<T> {
 	const before = new Set(vscode.window.terminals);
-	const refocus = (terminal: vscode.Terminal | undefined) => {
+	let timer: NodeJS.Timeout | undefined;
+	const refocusSoon = () => {
+		clearTimeout(timer);
+		timer = setTimeout(() => void vscode.commands.executeCommand(`${SERVERS_VIEW_ID}.focus`), REFOCUS_DELAY_MS);
+	};
+	const onTerminal = (terminal: vscode.Terminal | undefined) => {
 		if (terminal && !before.has(terminal)) {
-			void vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+			refocusSoon();
 		}
 	};
-	const listeners = [vscode.window.onDidOpenTerminal(refocus), vscode.window.onDidChangeActiveTerminal(refocus)];
+	const listeners = [vscode.window.onDidOpenTerminal(onTerminal), vscode.window.onDidChangeActiveTerminal(onTerminal)];
 	const dispose = () => listeners.forEach((listener) => listener.dispose());
 	try {
-		return await launch();
+		const result = await launch();
+		refocusSoon();
+		return result;
 	} finally {
 		// The debug terminal can open after the launch resolves.
 		setTimeout(dispose, FOCUS_GUARD_MS);

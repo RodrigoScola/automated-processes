@@ -6,7 +6,8 @@ export type RunStatus = 'running' | 'passed' | 'failed' | 'cancelled';
 
 export interface ViewWarning {
 	message: string;
-	action?: { label: string; command: CommandName };
+	/** `primary`: a highlighted button rather than a link. */
+	action?: { label: string; command: CommandName; primary?: boolean };
 }
 
 export interface ViewDatabase {
@@ -115,6 +116,7 @@ export type CommandName =
 	| 'syncMigrations'
 	| 'startDatabase'
 	| 'connectDatabase'
+	| 'startDocker'
 	| 'startServer'
 	| 'stopServer'
 	| 'debugServer'

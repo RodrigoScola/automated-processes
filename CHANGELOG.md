@@ -24,6 +24,20 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
   configurations are added one by one (**Add as server**; `server.includeLaunchConfigurations`
   now defaults to off); a Migrations section for Run Migrations and Sync Migrations.
 - Servers, scripts and migrations can run in a subfolder (`cwd`, `migrations.cwd`).
+- **Backup**, **Export Data** (to a database or a file) and **Import Data** (from a database or a
+  file, backing the target up first). Backups go outside the repository (`database.backupFolder`).
+- Scripts can run on VS Code startup, branch change, new commits or file save (`runOn`); servers
+  can start with VS Code (`runOnStartup`). The "update dependencies automatically" setting moved
+  into the script (`onGitUpdate` settings are still read).
+- Scripts and servers run without a database connection; a project without a database (no
+  `.env` or no URL) shows "No database connection" instead of a settings problem.
+- After an update, every sidebar view is shown once, so a layout VS Code remembered from older
+  versions can't keep the new views hidden.
+- "Docker isn't running" has a **Start Docker** button: it launches Docker Desktop, waits for it,
+  then reconnects (and starts the database container).
+- Debugging a server gives focus back to the Servers view half a second after the launch (and
+  after its terminal opens).
+- Icon picker with search over every codicon; the Migrations card folds away until it's set up.
 - New settings: `loadEnvFileIntoTerminals`, `applyToDebugSessions`, `echoCommands`,
   `database.autoStartContainer`, `database.warnIfPortExposed` (warns when the database container
   is reachable from the network).

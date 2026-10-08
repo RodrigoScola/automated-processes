@@ -130,6 +130,11 @@
         "category": "Automated Processes"
       },
       {
+        "command": "automated-processes.startDocker",
+        "title": "Start Docker Desktop",
+        "category": "Automated Processes"
+      },
+      {
         "command": "automated-processes.connectDatabase",
         "title": "Retry Database Connection",
         "category": "Automated Processes",
@@ -170,27 +175,27 @@
       },
       {
         "command": "automated-processes.configureDatabase",
-        "title": "Configure Database Connection",
+        "title": "Database Settings",
         "category": "Automated Processes",
         "icon": "$(settings-gear)"
       },
       {
         "command": "automated-processes.configureServers",
-        "title": "Add or Edit Servers",
+        "title": "Server Settings",
         "category": "Automated Processes",
-        "icon": "$(add)"
+        "icon": "$(settings-gear)"
       },
       {
         "command": "automated-processes.configureScripts",
-        "title": "Add or Edit Scripts and Migrations",
+        "title": "Script and Migration Settings",
         "category": "Automated Processes",
-        "icon": "$(add)"
+        "icon": "$(settings-gear)"
       },
       {
         "command": "automated-processes.openSettings",
         "title": "Open Settings",
         "category": "Automated Processes",
-        "icon": "$(json)"
+        "icon": "$(settings-gear)"
       },
       {
         "command": "automated-processes.cancelRun",
@@ -226,14 +231,9 @@
           "group": "navigation"
         },
         {
-          "command": "automated-processes.configure",
+          "command": "automated-processes.openSettings",
           "when": "view == automatedProcesses.options",
           "group": "navigation"
-        },
-        {
-          "command": "automated-processes.openSettings",
-          "when": "view =~ /^automatedProcesses./",
-          "group": "more"
         }
       ]
     },
@@ -569,6 +569,11 @@
               "cwd": {
                 "type": "string",
                 "description": "Folder the command runs in, relative to the workspace, e.g. frontend."
+              },
+              "runOnStartup": {
+                "type": "boolean",
+                "default": false,
+                "description": "Start it when VS Code starts (its command, else its debug configuration)."
               }
             }
           }
@@ -720,6 +725,43 @@
               "cwd": {
                 "type": "string",
                 "description": "Folder the steps run in, relative to the workspace."
+              },
+              "runOn": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "When it runs by itself. All off by default; an automatic run is skipped while another script runs.",
+                "properties": {
+                  "startup": {
+                    "type": "boolean",
+                    "description": "When VS Code starts."
+                  },
+                  "branchChange": {
+                    "type": "boolean",
+                    "description": "After switching branches."
+                  },
+                  "gitUpdate": {
+                    "type": "boolean",
+                    "description": "When the branch gets new commits (pull, merge, rebase), e.g. to update dependencies."
+                  },
+                  "gitUpdatePatterns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Only when one of these files changed in those commits, e.g. package-lock.json, uv.lock."
+                  },
+                  "fileSave": {
+                    "type": "boolean",
+                    "description": "When a file is saved."
+                  },
+                  "fileSavePatterns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Only for these files, e.g. *.py, src/*."
+                  }
+                }
               }
             }
           }
