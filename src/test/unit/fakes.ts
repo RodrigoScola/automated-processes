@@ -130,6 +130,7 @@ export class FakeEngine implements DatabaseEngine {
 	readonly results = new Map<string, string[][]>();
 	failListing: Error | undefined;
 	failDumpRestore: Error | undefined;
+	exposed: string[] = [];
 
 	constructor(...names: string[]) {
 		names.forEach((name) => this.databases.add(name));
@@ -183,6 +184,9 @@ export class FakeEngine implements DatabaseEngine {
 		this.calls.push(`drop ${database}`);
 		this.databases.delete(database);
 	}
+	async exposedAddresses() {
+		return [...this.exposed];
+	}
 
 	private assertMissing(database: string) {
 		if (this.databases.has(database)) {
@@ -218,9 +222,9 @@ export class FakeFiles implements FileOps {
 }
 
 export class FakeEnvSink implements EnvironmentSink {
-	last: { additions: EnvMap | undefined; terminals: boolean } | undefined;
-	apply(additions: EnvMap | undefined, options: { terminals: boolean }) {
-		this.last = { additions, terminals: options.terminals };
+	last: { additions: EnvMap | undefined; terminals: boolean; debugSessions: boolean } | undefined;
+	apply(additions: EnvMap | undefined, options: { terminals: boolean; debugSessions: boolean }) {
+		this.last = { additions, terminals: options.terminals, debugSessions: options.debugSessions };
 	}
 }
 
@@ -311,6 +315,7 @@ export interface Harness {
 	server: FakeServer;
 	settings: FakeSettings;
 	engineSettings: ClientSettings[];
+	engineKinds: string[];
 	config: Config;
 	env: ProjectEnv;
 	changes: number;
@@ -330,6 +335,7 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 		server: new FakeServer(),
 		settings: new FakeSettings(),
 		engineSettings: [],
+		engineKinds: [],
 		config: options.config ?? testConfig({ migrations: { command: 'migrate up' } }),
 		env: { main: { DATABASE_URL: MAIN_URL, OTHER: 'x' }, test: {}, ...options.env },
 		changes: 0,
@@ -351,7 +357,8 @@ export function harness(options: { config?: Config; env?: Partial<ProjectEnv>; d
 		root: () => root,
 		readEnv: () => h.env,
 		createEngine: (settings) => {
-			h.engineSettings.push(settings);
+			h.engineSettings.push(settings as ClientSettings);
+			h.engineKinds.push(settings.engine);
 			return h.engine;
 		},
 		processEnv: { PATH: '/bin' },

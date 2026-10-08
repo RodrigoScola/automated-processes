@@ -6,6 +6,7 @@ import {
 	describeFailure,
 	FIELD_SEPARATOR,
 	isTemplateInUse,
+	parseExposedAddresses,
 	parseRows,
 	PostgresEngine,
 	psqlArgs,
@@ -58,14 +59,24 @@ suite('postgres client commands', () => {
 	test('docker mode runs the tool inside the service with the password', () => {
 		const spec = clientSpec(docker, 'psql', ['-c', 'select 1']);
 		assert.strictEqual(spec.command, 'docker');
-		assert.deepStrictEqual(spec.args, ['compose', 'exec', '-T', '-e', 'PGPASSWORD=pw', 'db', 'psql', '-U', 'app', '-c', 'select 1']);
+		assert.deepStrictEqual(spec.args, ['compose', 'exec', '-T', '-e', 'PGPASSWORD', 'db', 'psql', '-U', 'app', '-c', 'select 1']);
 		assert.strictEqual(spec.cwd, '/repo');
+		assert.strictEqual(spec.env?.PGPASSWORD, 'pw');
+		assert.strictEqual(spec.env?.PATH, '/bin');
 	});
 
 	test('container mode uses docker exec -i, like `docker exec -it carli-db-1 psql`', () => {
 		const spec = clientSpec({ ...docker, dockerContainer: 'carli-db-1' }, 'psql', ['-d', 'automated']);
 		assert.strictEqual(spec.command, 'docker');
-		assert.deepStrictEqual(spec.args, ['exec', '-i', '-e', 'PGPASSWORD=pw', 'carli-db-1', 'psql', '-U', 'app', '-d', 'automated']);
+		assert.deepStrictEqual(spec.args, ['exec', '-i', '-e', 'PGPASSWORD', 'carli-db-1', 'psql', '-U', 'app', '-d', 'automated']);
+		assert.strictEqual(spec.env?.PGPASSWORD, 'pw');
+	});
+
+	test('the password is never on a docker command line', () => {
+		for (const settings of [docker, { ...docker, dockerContainer: 'c1' }]) {
+			const spec = clientSpec({ ...settings, password: 's3cr3t' }, 'pg_dump', ['-d', 'app']);
+			assert.ok(!spec.args.some((arg) => arg.includes('s3cr3t')), spec.args.join(' '));
+		}
 	});
 
 	test('a container takes precedence over a Compose service', () => {
@@ -76,6 +87,14 @@ suite('postgres client commands', () => {
 	test('docker mode without a password skips -e', () => {
 		const spec = clientSpec({ ...docker, password: '' }, 'pg_dump', []);
 		assert.deepStrictEqual(spec.args, ['compose', 'exec', '-T', 'db', 'pg_dump', '-U', 'app']);
+		assert.ok(!('PGPASSWORD' in (spec.env ?? {})));
+	});
+
+	test('finds ports published on every interface', () => {
+		const output = '5432/tcp -> 0.0.0.0:5432\r\n5432/tcp -> [::]:5432\n6379/tcp -> 127.0.0.1:6379\n';
+		assert.deepStrictEqual(parseExposedAddresses(output), ['0.0.0.0:5432', '[::]:5432']);
+		assert.deepStrictEqual(parseExposedAddresses('5432/tcp -> 127.0.0.1:5433\n'), []);
+		assert.deepStrictEqual(parseExposedAddresses(''), []);
 	});
 
 	test('local mode passes host, port and PGPASSWORD', () => {
@@ -158,5 +177,23 @@ suite('PostgresEngine', () => {
 		await assert.rejects(failedDump.engine.dumpRestore('a', 'b'), /pg_dump failed.*no such db/);
 		const failedRestore = engineWith({}, { from: { code: 0, stdout: '', stderr: '' }, to: { code: 1, stdout: '', stderr: 'bad' } });
 		await assert.rejects(failedRestore.engine.dumpRestore('a', 'b'), /pg_restore failed.*bad/);
+	});
+
+	test('exposedAddresses looks up the Compose container, then its published ports', async () => {
+		const ran: string[] = [];
+		const engine = new PostgresEngine(docker, async (spec) => {
+			ran.push(spec.args.join(' '));
+			return spec.args[0] === 'compose'
+				? { code: 0, stdout: 'abc123\n', stderr: '' }
+				: { code: 0, stdout: '5432/tcp -> 0.0.0.0:5433\n', stderr: '' };
+		});
+		assert.deepStrictEqual(await engine.exposedAddresses(), ['0.0.0.0:5433']);
+		assert.deepStrictEqual(ran, ['compose ps -q db', 'port abc123']);
+	});
+
+	test('exposedAddresses is empty outside Docker and when docker fails', async () => {
+		const failing = async () => ({ code: 1, stdout: '', stderr: 'boom' });
+		assert.deepStrictEqual(await new PostgresEngine(local, failing).exposedAddresses(), []);
+		assert.deepStrictEqual(await new PostgresEngine({ ...docker, dockerContainer: 'c1' }, failing).exposedAddresses(), []);
 	});
 });

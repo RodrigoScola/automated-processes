@@ -37,8 +37,61 @@ export function parseDbUrl(url: string): DbUrlParts {
 	};
 }
 
-/** The same URL pointing at another database on the same server. */
+// ── SQLite ───────────────────────────────────────────────────────────────────
+// A SQLite "database" is a file; its name is the file name without extension, and other
+// databases of the same project are files with the same extension in the same folder.
+
+/** `sqlite:///rel.db` / `sqlite:////abs.db` (SQLAlchemy), `sqlite:rel.db`, `file:./dev.db` (Prisma). */
+const SQLITE_URL_PATTERN = /^(sqlite(?:\+[a-z0-9]+)?:(?:\/\/\/?)?|file:)([^?#]*)(.*)$/i;
+const SQLITE_EXTENSIONS = /\.(db|db3|sqlite|sqlite3)$/i;
+
+export interface SqliteUrlParts {
+	/** Everything before the path, e.g. `sqlite:///`. */
+	prefix: string;
+	/** File path as written: relative to the project, or absolute. */
+	path: string;
+	/** Query string and anything after it. */
+	suffix: string;
+}
+
+/** Parses a SQLite URL or a bare `.db` / `.sqlite` path; undefined for anything else. */
+export function parseSqliteUrl(url: string): SqliteUrlParts | undefined {
+	const text = url.trim();
+	const match = SQLITE_URL_PATTERN.exec(text);
+	if (match) {
+		return { prefix: match[1], path: match[2], suffix: match[3] };
+	}
+	if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text) && SQLITE_EXTENSIONS.test(text.replace(/[?#].*$/, ''))) {
+		const query = text.search(/[?#]/);
+		return query < 0
+			? { prefix: '', path: text, suffix: '' }
+			: { prefix: '', path: text.slice(0, query), suffix: text.slice(query) };
+	}
+	return undefined;
+}
+
+export function isSqliteUrl(url: string): boolean {
+	return parseSqliteUrl(url) !== undefined;
+}
+
+function splitFile(path: string): { folder: string; name: string; extension: string } {
+	const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+	const file = path.slice(slash + 1);
+	const dot = file.lastIndexOf('.');
+	return dot > 0
+		? { folder: path.slice(0, slash + 1), name: file.slice(0, dot), extension: file.slice(dot) }
+		: { folder: path.slice(0, slash + 1), name: file, extension: '' };
+}
+
+// ── Any engine ───────────────────────────────────────────────────────────────
+
+/** The same URL pointing at another database on the same server (or another file next to it). */
 export function withDatabase(url: string, database: string): string {
+	const sqlite = parseSqliteUrl(url);
+	if (sqlite) {
+		const { folder, extension } = splitFile(sqlite.path);
+		return `${sqlite.prefix}${folder}${database}${extension}${sqlite.suffix}`;
+	}
 	const match = URL_PATTERN.exec(url.trim());
 	if (!match) {
 		throw new Error('Not a database URL (expected scheme://user:password@host:port/database).');
@@ -48,7 +101,8 @@ export function withDatabase(url: string, database: string): string {
 }
 
 export function databaseName(url: string): string {
-	return parseDbUrl(url).database;
+	const sqlite = parseSqliteUrl(url);
+	return sqlite ? splitFile(sqlite.path).name : parseDbUrl(url).database;
 }
 
 function safeDecode(value: string): string {

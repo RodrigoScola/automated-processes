@@ -5,6 +5,8 @@ import { DEFAULT_DOWN_REVISION_PATTERN, DEFAULT_REVISION_PATTERN } from './migra
 export type BranchChangeMode = 'off' | 'ask' | 'always';
 export type MergedBranchMode = 'delete' | 'keep';
 export type ServerRestartMode = 'restart' | 'ask' | 'off';
+/** `auto` picks SQLite for SQLite URLs (`sqlite:///…`, `file:…`, `*.db`) and PostgreSQL otherwise. */
+export type DatabaseEngineKind = 'auto' | 'postgres' | 'sqlite';
 
 export interface ScriptInput {
 	options: string[];
@@ -43,13 +45,27 @@ export interface MigrationStream {
 export interface Config {
 	envFile: string;
 	loadEnvFileIntoCommands: boolean;
+	/** Env file values also go to new terminals and debug sessions (with `loadEnvFileIntoCommands`). */
+	loadEnvFileIntoTerminals: boolean;
 	env: Record<string, string>;
 	applyToTerminals: boolean;
+	applyToDebugSessions: boolean;
+	/** Print each command at the top of its terminal. */
+	echoCommands: boolean;
 	database: {
+		engine: DatabaseEngineKind;
+		/** Main database URL entered in the extension; empty = read it from the env file. */
+		url: string;
+		/** Folder relative SQLite paths are resolved against, relative to the workspace; empty = the workspace. */
+		sqliteFolder: string;
 		urlVariables: string[];
 		mainBranches: string[];
 		dockerContainer: string;
 		dockerComposeService: string;
+		/** Start a stopped database container without asking (on startup and Retry). */
+		autoStartContainer: boolean;
+		/** Warn when the database container publishes its port on every network interface. */
+		warnIfPortExposed: boolean;
 		hidePatterns: string[];
 		newNamePattern: string;
 		/** New Database copies the main database's data (and schema) into the new one. */
@@ -70,6 +86,8 @@ export interface Config {
 	server: {
 		/** What to do with running servers and debug sessions when the current database changes. */
 		onDatabaseChange: ServerRestartMode;
+		/** Show launch.json configurations as servers with a debug button. */
+		includeLaunchConfigurations: boolean;
 	};
 	/** Servers with run/debug buttons (`servers`, or the single legacy `server.command`). */
 	servers: ServerDefinition[];
@@ -94,18 +112,58 @@ export interface ServerDefinition {
 	debugConfiguration: string;
 	/** Restart it when the current database changes (off for e.g. a frontend). */
 	restartOnDatabaseChange: boolean;
+	/** Where it comes from, once merged with launch.json (see `mergeLaunchServers`). */
+	source?: 'config' | 'launch' | 'both';
+}
+
+/** A launch.json configuration, as far as servers care. */
+export interface LaunchConfiguration {
+	name: string;
+}
+
+/**
+ * Servers from the settings merged with launch.json, launch.json first: every launch
+ * configuration is a server with a debug button, and a configured server whose
+ * `debugConfiguration` names one takes its place (adding its run command).
+ */
+export function mergeLaunchServers(servers: readonly ServerDefinition[], launch: readonly LaunchConfiguration[]): ServerDefinition[] {
+	const merged: ServerDefinition[] = [];
+	const used = new Set<string>();
+	for (const configuration of launch) {
+		const match = servers.find((server) => server.debugConfiguration === configuration.name && !used.has(server.id));
+		if (match) {
+			used.add(match.id);
+			merged.push({ ...match, source: 'both' });
+		} else if (!servers.some((server) => server.id === configuration.name) && !merged.some((server) => server.id === configuration.name)) {
+			merged.push({ id: configuration.name, label: configuration.name, command: '', debugConfiguration: configuration.name, restartOnDatabaseChange: true, source: 'launch' });
+		}
+	}
+	for (const server of servers) {
+		if (!used.has(server.id)) {
+			merged.push({ ...server, source: 'config' });
+		}
+	}
+	return merged;
 }
 
 export const DEFAULT_CONFIG: Config = {
 	envFile: '.env',
 	loadEnvFileIntoCommands: true,
+	loadEnvFileIntoTerminals: true,
 	env: {},
 	applyToTerminals: true,
+	applyToDebugSessions: true,
+	echoCommands: true,
 	database: {
+		engine: 'auto',
+		url: '',
+		sqliteFolder: '',
 		urlVariables: ['DATABASE_URL'],
 		mainBranches: ['main'],
 		dockerContainer: '',
 		dockerComposeService: '',
+		autoStartContainer: true,
+		warnIfPortExposed: true,
 		hidePatterns: ['postgres'],
 		newNamePattern: '{main}_{branchShort}',
 		importDataOnCreate: true,
@@ -124,6 +182,7 @@ export const DEFAULT_CONFIG: Config = {
 	},
 	server: {
 		onDatabaseChange: 'restart',
+		includeLaunchConfigurations: true,
 	},
 	servers: [],
 	onGitUpdate: {
@@ -150,13 +209,21 @@ export function readConfig(read: SettingReader): ConfigResult {
 	const config: Config = {
 		envFile: str(read('envFile'), d.envFile),
 		loadEnvFileIntoCommands: bool(read('loadEnvFileIntoCommands'), d.loadEnvFileIntoCommands),
+		loadEnvFileIntoTerminals: bool(read('loadEnvFileIntoTerminals'), d.loadEnvFileIntoTerminals),
 		env: stringMap(read('env'), 'env', problems),
 		applyToTerminals: bool(read('applyToTerminals'), d.applyToTerminals),
+		applyToDebugSessions: bool(read('applyToDebugSessions'), d.applyToDebugSessions),
+		echoCommands: bool(read('echoCommands'), d.echoCommands),
 		database: {
+			engine: oneOf(read('database.engine'), ['auto', 'postgres', 'sqlite'], d.database.engine),
+			url: str(read('database.url'), d.database.url, true),
+			sqliteFolder: str(read('database.sqliteFolder'), d.database.sqliteFolder, true),
 			urlVariables: strList(read('database.urlVariables'), d.database.urlVariables),
 			mainBranches: strList(read('database.mainBranches'), d.database.mainBranches),
-			dockerContainer: str(read('database.dockerContainer'), d.database.dockerContainer, true),
-			dockerComposeService: str(read('database.dockerComposeService'), d.database.dockerComposeService, true),
+			dockerContainer: dockerName(read('database.dockerContainer'), 'database.dockerContainer', problems),
+			dockerComposeService: dockerName(read('database.dockerComposeService'), 'database.dockerComposeService', problems),
+			autoStartContainer: bool(read('database.autoStartContainer'), d.database.autoStartContainer),
+			warnIfPortExposed: bool(read('database.warnIfPortExposed'), d.database.warnIfPortExposed),
 			hidePatterns: strList(read('database.hidePatterns'), d.database.hidePatterns, true),
 			newNamePattern: str(read('database.newNamePattern'), d.database.newNamePattern),
 			importDataOnCreate: bool(read('database.importDataOnCreate'), d.database.importDataOnCreate),
@@ -175,6 +242,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 		},
 		server: {
 			onDatabaseChange: oneOf(read('server.onDatabaseChange'), ['restart', 'ask', 'off'], d.server.onDatabaseChange),
+			includeLaunchConfigurations: bool(read('server.includeLaunchConfigurations'), d.server.includeLaunchConfigurations),
 		},
 		servers: readServers(read('servers'), read('server.command'), read('server.debugConfiguration'), problems),
 		onGitUpdate: {
@@ -373,6 +441,19 @@ function str(value: unknown, fallback: string, allowEmpty = false): string {
 	}
 	const trimmed = value.trim();
 	return trimmed || allowEmpty ? trimmed : fallback;
+}
+
+/**
+ * A container or Compose service name. These end up in `docker` command lines (one of them run
+ * through a shell), so anything but Docker's name characters is rejected rather than run.
+ */
+function dockerName(value: unknown, where: string, problems: string[]): string {
+	const name = str(value, '', true);
+	if (name && !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) {
+		problems.push(`${where}: "${name}" isn't a valid name (letters, digits, "_", "." and "-", starting with a letter or digit). Ignored.`);
+		return '';
+	}
+	return name;
 }
 
 function bool(value: unknown, fallback: boolean): boolean {

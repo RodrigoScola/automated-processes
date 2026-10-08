@@ -7,6 +7,7 @@ import { EnvMap } from './envFile';
 import {
 	buildCommandEnv,
 	buildEnvAdditions,
+	engineKind,
 	MainDatabase,
 	mainDatabase,
 	placeholderContext,
@@ -16,8 +17,9 @@ import {
 import { matchesAnyGlob, matchesGlob } from './glob';
 import { suggestDatabaseName, testDatabaseName, validateDatabaseName } from './names';
 import { EnvironmentSink, GitPort, PickItem, ServerControl, SettingsWriter, Ui } from './ports';
-import { ClientSettings, DatabaseEngine, isContainerStopped, isDockerDown, isTemplateInUse, isToolMissing } from './postgres';
+import { DatabaseEngine, isContainerStopped, isDockerDown, isTemplateInUse, isToolMissing } from './postgres';
 import { RunState, ScriptRunner } from './scriptRunner';
+import { EngineSettings, sqliteFilePath } from './sqlite';
 import { BranchStore, KeyValueStore } from './store';
 import { ViewServer, ViewState, ViewWarning } from '../shared/protocol';
 
@@ -37,7 +39,7 @@ export interface ControllerDeps {
 	/** Workspace folder, or undefined when none is open. */
 	root(): string | undefined;
 	readEnv(root: string, config: Config): ProjectEnv;
-	createEngine(settings: ClientSettings): DatabaseEngine;
+	createEngine(settings: EngineSettings): DatabaseEngine;
 	server: ServerControl;
 	processEnv: Record<string, string | undefined>;
 	onDidChange(): void;
@@ -67,6 +69,8 @@ export class Controller {
 	private dbError: string | undefined;
 	/** Why a Docker database is unreachable, when that's known. */
 	private dockerProblem: 'dockerDown' | 'containerStopped' | undefined;
+	/** Addresses the database container publishes on every network interface. */
+	private exposedAddresses: string[] = [];
 	private busy: string | undefined;
 	private problems: string[] = [];
 	private current: CurrentDatabase | undefined;
@@ -86,7 +90,7 @@ export class Controller {
 		this.started = true;
 		await this.refresh();
 		this.initialized = true;
-		if (this.dockerProblem === 'containerStopped') {
+		if (this.dockerProblem === 'containerStopped' && this.deps.readConfig().config.database.autoStartContainer) {
 			await this.startDatabase();
 		}
 		await this.checkFinishedBranches();
@@ -130,8 +134,9 @@ export class Controller {
 		this.problems = [...problems];
 		this.current = undefined;
 		this.mainName = undefined;
+		this.exposedAddresses = [];
 		if (!root) {
-			this.deps.envSink.apply(undefined, { terminals: false, description: '' });
+			this.deps.envSink.apply(undefined, { terminals: false, debugSessions: false, description: '' });
 			this.changed();
 			return;
 		}
@@ -145,7 +150,7 @@ export class Controller {
 			this.problems.push(messageOf(error));
 			this.databases = [];
 			this.dbStatus = 'unknown';
-			this.deps.envSink.apply(undefined, { terminals: false, description: '' });
+			this.deps.envSink.apply(undefined, { terminals: false, debugSessions: false, description: '' });
 			this.changed();
 			return;
 		}
@@ -168,13 +173,23 @@ export class Controller {
 				isMain: this.current.isMain,
 				branch,
 			}),
-			{ terminals: config.applyToTerminals, description: `Database: ${this.current.database}` },
+			{
+				terminals: config.applyToTerminals,
+				debugSessions: config.applyToDebugSessions,
+				description: `Database: ${this.current.database}`,
+			},
 		);
 
 		this.dbStatus = 'loading';
 		this.changed();
 		try {
-			this.databases = await this.engineFor(config, root, main).listDatabases();
+			const engine = this.engineFor(config, root, main);
+			const [databases, exposed] = await Promise.all([
+				engine.listDatabases(),
+				config.database.warnIfPortExposed ? engine.exposedAddresses().catch(() => []) : Promise.resolve([]),
+			]);
+			this.databases = databases;
+			this.exposedAddresses = exposed;
 			this.dbStatus = 'ok';
 			this.dbError = undefined;
 			this.dockerProblem = undefined;
@@ -314,7 +329,10 @@ export class Controller {
 			} else if (docker && this.dockerProblem === 'containerStopped') {
 				warnings.push({
 					message: `The "${docker.name}" container isn't running.`,
-					action: { label: 'Retry', command: 'connectDatabase' },
+					// Retry starts it only when it may start by itself.
+					action: config.database.autoStartContainer
+						? { label: 'Retry', command: 'connectDatabase' }
+						: { label: 'Start Database', command: 'startDatabase' },
 				});
 			} else {
 				warnings.push({
@@ -324,6 +342,12 @@ export class Controller {
 					action: docker ? { label: 'Start Database', command: 'startDatabase' } : undefined,
 				});
 			}
+		}
+		if (this.exposedAddresses.length > 0) {
+			const docker = dockerTarget(config);
+			warnings.push({
+				message: `The "${docker?.name ?? 'database'}" container publishes ${this.exposedAddresses.join(', ')} on every network interface, so other machines on your network can reach the database. Publish it on 127.0.0.1 only (e.g. "127.0.0.1:5432:5432" in the Compose file).`,
+			});
 		}
 		if (this.current && !this.current.linked && branch && !isMainBranch(branch, config.database.mainBranches)) {
 			warnings.push({
@@ -624,10 +648,13 @@ export class Controller {
 		}
 	}
 
-	/** Checks the database again, and starts its container when Docker runs but the container doesn't. */
+	/**
+	 * Checks the database again, and starts its container when Docker runs but the container doesn't
+	 * (unless `database.autoStartContainer` is off).
+	 */
 	async connectDatabase(): Promise<void> {
 		await this.refresh();
-		if (this.dockerProblem === 'containerStopped') {
+		if (this.dockerProblem === 'containerStopped' && this.deps.readConfig().config.database.autoStartContainer) {
 			await this.startDatabase();
 		}
 	}
@@ -1237,8 +1264,17 @@ export class Controller {
 	}
 
 	private engineFor(config: Config, root: string, main: MainDatabase): DatabaseEngine {
+		if (engineKind(main.url) === 'sqlite') {
+			return this.deps.createEngine({
+				engine: 'sqlite',
+				file: sqliteFilePath(main.url, path.resolve(root, config.database.sqliteFolder)),
+				cwd: root,
+				processEnv: cleanEnv(this.deps.processEnv),
+			});
+		}
 		const parts = parseDbUrl(main.url);
 		return this.deps.createEngine({
+			engine: 'postgres',
 			user: parts.user,
 			password: parts.password,
 			host: parts.host,

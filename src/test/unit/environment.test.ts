@@ -104,4 +104,13 @@ suite('environment', () => {
 		assert.strictEqual(additions.BRANCH, 'b');
 		assert.match(additions.DATABASE_URL, /automated_347$/);
 	});
+
+	test('additions leave the env file out when loadEnvFileIntoTerminals is off, but commands keep it', () => {
+		const options = { processEnv: {}, config: { ...config, loadEnvFileIntoTerminals: false }, env, database: 'automated_347', isMain: false, branch: 'b' };
+		const additions = buildEnvAdditions(options);
+		assert.ok(!('CARLI_DB_PASSWORD' in additions));
+		assert.match(additions.DATABASE_URL, /automated_347$/);
+		assert.strictEqual(additions.BRANCH, 'b');
+		assert.strictEqual(buildCommandEnv(options).CARLI_DB_PASSWORD, 'pw');
+	});
 });

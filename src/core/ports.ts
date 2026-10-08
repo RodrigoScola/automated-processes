@@ -47,7 +47,7 @@ export interface GitPort {
 
 /** Applies extra variables to new terminals and debug sessions. `undefined` clears them. */
 export interface EnvironmentSink {
-	apply(additions: EnvMap | undefined, options: { terminals: boolean; description: string }): void;
+	apply(additions: EnvMap | undefined, options: { terminals: boolean; debugSessions: boolean; description: string }): void;
 }
 
 /** The app's servers (each in a terminal the extension owns) and running debug sessions. */

@@ -12,8 +12,12 @@ export const SKIPPED_DEBUG_TYPES = new Set(['chrome', 'msedge', 'pwa-chrome', 'p
  */
 export class VsCodeEnvironmentSink implements EnvironmentSink, vscode.DebugConfigurationProvider {
 	private additions: EnvMap | undefined;
+	private debugSessions = false;
 
-	constructor(private readonly context: vscode.ExtensionContext) {
+	constructor(
+		private readonly context: vscode.ExtensionContext,
+		private readonly folder: vscode.WorkspaceFolder | undefined,
+	) {
 		const collection = context.environmentVariableCollection;
 		// Values can include passwords from the env file; don't write them to workspace storage.
 		collection.persistent = false;
@@ -22,11 +26,12 @@ export class VsCodeEnvironmentSink implements EnvironmentSink, vscode.DebugConfi
 
 	/** What debug launches currently get; used when relaunching a session not from launch.json. */
 	get current(): EnvMap | undefined {
-		return this.additions;
+		return this.debugSessions ? this.additions : undefined;
 	}
 
-	apply(additions: EnvMap | undefined, options: { terminals: boolean; description: string }): void {
+	apply(additions: EnvMap | undefined, options: { terminals: boolean; debugSessions: boolean; description: string }): void {
 		this.additions = additions;
+		this.debugSessions = options.debugSessions;
 		const collection = this.context.environmentVariableCollection;
 		collection.clear();
 		if (!additions || !options.terminals) {
@@ -40,14 +45,19 @@ export class VsCodeEnvironmentSink implements EnvironmentSink, vscode.DebugConfi
 	}
 
 	resolveDebugConfiguration(
-		_folder: vscode.WorkspaceFolder | undefined,
+		folder: vscode.WorkspaceFolder | undefined,
 		configuration: vscode.DebugConfiguration,
 	): vscode.DebugConfiguration {
-		if (!this.additions || configuration.request !== 'launch' || SKIPPED_DEBUG_TYPES.has(configuration.type)) {
+		const current = this.current;
+		if (!current || configuration.request !== 'launch' || SKIPPED_DEBUG_TYPES.has(configuration.type)) {
+			return configuration;
+		}
+		// In a multi-root workspace, another folder's launches must not get this folder's env file.
+		if (folder && this.folder && folder.uri.toString() !== this.folder.uri.toString()) {
 			return configuration;
 		}
 		// Launch config's own `env` wins; ours wins over its `envFile`.
-		configuration.env = { ...this.additions, ...(configuration.env ?? {}) };
+		configuration.env = { ...current, ...(configuration.env ?? {}) };
 		return configuration;
 	}
 }

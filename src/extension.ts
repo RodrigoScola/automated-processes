@@ -6,6 +6,7 @@ import { readEnvFile } from './core/envFile';
 import { ProjectEnv } from './core/environment';
 import { PostgresEngine } from './core/postgres';
 import { ScriptRunner } from './core/scriptRunner';
+import { SqliteEngine } from './core/sqlite';
 import { BranchStore } from './core/store';
 import { WebviewMessage } from './shared/protocol';
 import { VsCodeEnvironmentSink } from './vscode/environment';
@@ -23,12 +24,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	const root = folder?.uri.fsPath;
 
-	const executor = new TaskExecutor(folder);
+	const echoCommands = () => readSettings(folder).config.echoCommands;
+	const executor = new TaskExecutor(folder, echoCommands);
 	const git = new VsCodeGit(root ?? '');
-	const envSink = new VsCodeEnvironmentSink(context);
+	const envSink = new VsCodeEnvironmentSink(context, folder);
 	const statusBar = new StatusBar();
 	let sidebar: SidebarProvider | undefined;
-	const server = new VsCodeServer(folder, envSink, () => notify());
+	const server = new VsCodeServer(folder, envSink, () => notify(), echoCommands);
 
 	const controller: Controller = new Controller({
 		ui: new VsCodeUi(),
@@ -41,7 +43,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Contro
 		readConfig: () => readSettings(folder),
 		root: () => root,
 		readEnv,
-		createEngine: (settings) => new PostgresEngine(settings),
+		createEngine: (settings) => (settings.engine === 'sqlite' ? new SqliteEngine(settings) : new PostgresEngine(settings)),
 		server,
 		processEnv: process.env,
 		onDidChange: () => notify(),

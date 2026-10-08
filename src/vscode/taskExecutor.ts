@@ -10,7 +10,11 @@ export class TaskExecutor implements CommandExecutor {
 	private execution: vscode.TaskExecution | undefined;
 	private lastName: string | undefined;
 
-	constructor(private readonly folder: vscode.WorkspaceFolder | undefined) {}
+	constructor(
+		private readonly folder: vscode.WorkspaceFolder | undefined,
+		/** Print the command at the top of the terminal (off when commands may hold secrets). */
+		private readonly echo: () => boolean = () => true,
+	) {}
 
 	runCommand(request: CommandRequest): Promise<number> {
 		const id = `${Date.now()}-${++this.counter}`;
@@ -27,7 +31,7 @@ export class TaskExecutor implements CommandExecutor {
 			showReuseMessage: false,
 			clear: false,
 			focus: false,
-			echo: true,
+			echo: this.echo(),
 		};
 		this.lastName = request.name;
 

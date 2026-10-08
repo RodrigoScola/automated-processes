@@ -30,12 +30,17 @@ The design and decisions are in [PLAN.md](PLAN.md).
 |---|---|---|
 | `envFile` | `.env` | Env file with the database URL (read only) |
 | `loadEnvFileIntoCommands` | `true` | Pass env file values to every command |
+| `loadEnvFileIntoTerminals` | `true` | Also pass them to new terminals and debug sessions; off = only the database URL variables and `env` |
 | `env` | `{}` | Extra variables for every command (placeholders allowed) |
 | `applyToTerminals` | `true` | Current database in new terminals |
+| `applyToDebugSessions` | `true` | Current database in debug sessions of this folder (overrides the launch configuration's `envFile`) |
+| `echoCommands` | `true` | Print each command, placeholders filled in, at the top of its terminal |
 | `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the current database; the first defines main |
 | `database.mainBranches` | `["main"]` | Branches that use the main database |
 | `database.dockerContainer` | `""` | Run Postgres tools in this container (`docker exec`) |
 | `database.dockerComposeService` | `""` | Or in this Compose service (`docker compose exec`) |
+| `database.autoStartContainer` | `true` | Start a stopped database container on startup and Retry without asking |
+| `database.warnIfPortExposed` | `true` | Warn when the container publishes its port on every network interface |
 | `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
 | `database.newNamePattern` | `{main}_{branchShort}` | Suggested new database name (`{main}`, `{branch}`, `{branchShort}`, `{issue}`) |
 | `database.importDataOnCreate` | `true` | New Database imports the main database (schema and data); off = empty database + migrations |
@@ -58,6 +63,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`, `${db.mainUrl}`,
 `${testDb.name}`, `${testDb.url}`, `${env:NAME}`, `${input:NAME}`, `${branch}`.
+
+What can leak (env file secrets, the database password, an exposed database port) and the
+settings that control it are in [SECURITY-REPORT.md](SECURITY-REPORT.md).
 
 ### Example
 

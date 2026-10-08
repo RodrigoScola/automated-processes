@@ -23,6 +23,8 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 		private readonly folder: vscode.WorkspaceFolder | undefined,
 		private readonly envSink: VsCodeEnvironmentSink,
 		private readonly onDidChange: () => void,
+		/** Print the command at the top of the terminal (off when commands may hold secrets). */
+		private readonly echo: () => boolean = () => true,
 	) {
 		this.disposables.push(
 			vscode.tasks.onDidEndTask((event) => {
@@ -69,7 +71,7 @@ export class VsCodeServer implements ServerControl, vscode.Disposable {
 			showReuseMessage: false,
 			clear: true,
 			focus: false,
-			echo: true,
+			echo: this.echo(),
 		};
 		this.executions.set(id, await vscode.tasks.executeTask(task));
 		this.onDidChange();

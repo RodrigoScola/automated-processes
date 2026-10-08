@@ -182,7 +182,13 @@
           "type": "boolean",
           "default": true,
           "order": 2,
-          "markdownDescription": "Pass every variable from `#automatedProcesses.envFile#` to scripts, migrations, new terminals and debug sessions. Useful on Windows, where tools that only read real environment variables don't see `.env`."
+          "markdownDescription": "Pass every variable from `#automatedProcesses.envFile#` to scripts, migrations and servers (and to new terminals and debug sessions, see `#automatedProcesses.loadEnvFileIntoTerminals#`). Useful on Windows, where tools that only read real environment variables don't see `.env`."
+        },
+        "automatedProcesses.loadEnvFileIntoTerminals": {
+          "type": "boolean",
+          "default": true,
+          "order": 2,
+          "markdownDescription": "Also pass every variable from `#automatedProcesses.envFile#` to new terminals and debug sessions (needs `#automatedProcesses.loadEnvFileIntoCommands#`). Turn off so they only get the database URL variables and `#automatedProcesses.env#`, and the env file's secrets don't reach every program you start in a terminal (e.g. `npm install` scripts)."
         },
         "automatedProcesses.env": {
           "type": "object",
@@ -198,6 +204,18 @@
           "default": true,
           "order": 4,
           "markdownDescription": "Put the current database (and env file values, if enabled) into new VS Code terminals."
+        },
+        "automatedProcesses.applyToDebugSessions": {
+          "type": "boolean",
+          "default": true,
+          "order": 4,
+          "markdownDescription": "Put the current database (and env file values, if enabled) into debug sessions launched from this workspace folder. They override the launch configuration's `envFile`, so turn this off if a launch configuration must keep its own values (e.g. tests pointed at a test database)."
+        },
+        "automatedProcesses.echoCommands": {
+          "type": "boolean",
+          "default": true,
+          "order": 5,
+          "markdownDescription": "Print each command at the top of its terminal, with placeholders filled in. Turn off if commands contain secrets (e.g. `${db.url}` with a password), so they don't show up in terminal output."
         },
         "automatedProcesses.database.urlVariables": {
           "type": "array",
@@ -232,6 +250,18 @@
           "default": "",
           "order": 13,
           "markdownDescription": "Docker Compose service running PostgreSQL (`docker compose exec <service>`, run from the workspace folder). Alternative to `#automatedProcesses.database.dockerContainer#`."
+        },
+        "automatedProcesses.database.autoStartContainer": {
+          "type": "boolean",
+          "default": true,
+          "order": 13,
+          "markdownDescription": "Start the database container by itself (`docker start` or `docker compose up`) when VS Code opens, and on **Retry**, if Docker runs but the container is stopped. Turn off to start it only with **Start Database**."
+        },
+        "automatedProcesses.database.warnIfPortExposed": {
+          "type": "boolean",
+          "default": true,
+          "order": 13,
+          "markdownDescription": "Warn in the sidebar when the database container publishes its port on every network interface (`0.0.0.0`), where other machines on your network can reach it."
         },
         "automatedProcesses.database.hidePatterns": {
           "type": "array",

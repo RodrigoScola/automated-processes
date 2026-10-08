@@ -95,6 +95,41 @@ suite('Controller: refresh and view state', () => {
 		assert.ok(h.controller.snapshot().warnings.some((warning) => warning.message.includes('"carli-db-1"') && warning.action?.command === 'startDatabase'));
 	});
 
+	test('with autoStartContainer off, a stopped container is never started by itself', async () => {
+		const h = harness({ config: testConfig({ database: { dockerContainer: 'carli-db-1', autoStartContainer: false } }) });
+		h.engine.failListing = new Error('container carli-db-1 is not running');
+		await h.controller.start();
+		await h.controller.connectDatabase();
+		assert.strictEqual(h.executor.requests.length, 0);
+		const warning = h.controller.snapshot().warnings.find((item) => item.message.includes('"carli-db-1"'));
+		assert.strictEqual(warning?.action?.command, 'startDatabase');
+
+		await h.controller.startDatabase();
+		assert.strictEqual(h.executor.requests[0].command, 'docker start carli-db-1');
+	});
+
+	test('warns when the database container is published on every interface', async () => {
+		const h = harness({ config: testConfig({ database: { dockerContainer: 'carli-db-1' } }) });
+		h.engine.exposed = ['0.0.0.0:5432', '[::]:5432'];
+		await h.controller.start();
+		const warning = h.controller.snapshot().warnings.find((item) => item.message.includes('every network interface'));
+		assert.match(warning?.message ?? '', /"carli-db-1" container publishes 0\.0\.0\.0:5432, \[::\]:5432/);
+
+		h.config = testConfig({ database: { dockerContainer: 'carli-db-1', warnIfPortExposed: false } });
+		await h.controller.refresh();
+		assert.ok(!h.controller.snapshot().warnings.some((item) => item.message.includes('every network interface')));
+	});
+
+	test('debug sessions get the environment only while applyToDebugSessions is on', async () => {
+		const h = harness();
+		await h.controller.start();
+		assert.strictEqual(h.envSink.last?.debugSessions, true);
+		h.config = testConfig({ applyToDebugSessions: false, applyToTerminals: false });
+		await h.controller.refresh();
+		assert.strictEqual(h.envSink.last?.debugSessions, false);
+		assert.strictEqual(h.envSink.last?.terminals, false);
+	});
+
 	test('a missing psql explains how to use Docker instead', async () => {
 		const h = harness();
 		h.engine.failListing = new Error('"psql" was not found. Is it installed and on PATH?');
@@ -530,7 +565,7 @@ suite('Controller: servers', () => {
 	const frontend = { id: 'frontend', label: 'Frontend', command: 'npm run dev', debugConfiguration: 'Frontend: Vite', restartOnDatabaseChange: false };
 	const serverConfig = (overrides: { onDatabaseChange?: 'restart' | 'ask' | 'off'; onBranchChange?: 'off' | 'ask' | 'always' } = {}) => testConfig({
 		migrations: { command: 'migrate', onBranchChange: overrides.onBranchChange ?? 'off' },
-		server: { onDatabaseChange: overrides.onDatabaseChange ?? 'restart' },
+		server: { onDatabaseChange: overrides.onDatabaseChange ?? 'restart', includeLaunchConfigurations: true },
 		servers: [backend, frontend],
 	});
 	function setup(config = serverConfig(), databases = ['postgres', 'app', 'other']) {

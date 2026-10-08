@@ -25,6 +25,8 @@ export interface DatabaseEngine {
 	/** Per-database settings (`ALTER DATABASE … SET`) aren't copied by templates or dumps. */
 	copySettings(source: string, target: string): Promise<void>;
 	drop(database: string): Promise<void>;
+	/** Addresses the Docker database container publishes on every network interface (empty outside Docker). */
+	exposedAddresses(): Promise<string[]>;
 }
 
 // ── SQL helpers ──────────────────────────────────────────────────────────────
@@ -95,14 +97,17 @@ export const FIELD_SEPARATOR = '\x1f';
 
 /** Command line for one client tool, in Docker or locally. */
 export function clientSpec(settings: ClientSettings, tool: ClientTool, args: string[]): ProcessSpec {
-	const passwordArgs = settings.password ? ['-e', `PGPASSWORD=${settings.password}`] : [];
+	// `-e PGPASSWORD` without a value makes docker copy it from its own environment, so the
+	// password never appears on a command line, where any process on the machine can read it.
+	const passwordArgs = settings.password ? ['-e', 'PGPASSWORD'] : [];
+	const dockerEnv = settings.password ? { ...settings.processEnv, PGPASSWORD: settings.password } : settings.processEnv;
 	if (settings.dockerContainer) {
 		// -i keeps stdin open so pg_restore can read a piped dump; no -t, output is captured.
 		return {
 			command: 'docker',
 			args: ['exec', '-i', ...passwordArgs, settings.dockerContainer, tool, '-U', settings.user, ...args],
 			cwd: settings.cwd,
-			env: settings.processEnv,
+			env: dockerEnv,
 		};
 	}
 	if (settings.dockerComposeService) {
@@ -110,7 +115,7 @@ export function clientSpec(settings: ClientSettings, tool: ClientTool, args: str
 			command: 'docker',
 			args: ['compose', 'exec', '-T', ...passwordArgs, settings.dockerComposeService, tool, '-U', settings.user, ...args],
 			cwd: settings.cwd,
-			env: settings.processEnv,
+			env: dockerEnv,
 		};
 	}
 	const hostArgs = settings.host ? ['-h', settings.host] : [];
@@ -132,6 +137,14 @@ export function parseRows(stdout: string): string[][] {
 		.split(/\r?\n/)
 		.filter((line) => line.length > 0)
 		.map((line) => line.split(FIELD_SEPARATOR));
+}
+
+/** Of `docker port` output (`5432/tcp -> 0.0.0.0:5432`), the addresses bound to every interface. */
+export function parseExposedAddresses(stdout: string): string[] {
+	return stdout
+		.split(/\r?\n/)
+		.map((line) => line.split('->')[1]?.trim() ?? '')
+		.filter((address) => /^(0\.0\.0\.0|\[::\]|::):\d+$/.test(address));
 }
 
 export type ProcessRunner = (spec: ProcessSpec) => Promise<ProcessResult>;
@@ -205,6 +218,21 @@ export class PostgresEngine implements DatabaseEngine {
 
 	async drop(database: string): Promise<void> {
 		await this.query(SQL.drop(database));
+	}
+
+	async exposedAddresses(): Promise<string[]> {
+		const { dockerContainer, dockerComposeService, cwd, processEnv } = this.settings;
+		const docker = (args: string[]) => this.run({ command: 'docker', args, cwd, env: processEnv });
+		let container = dockerContainer;
+		if (!container && dockerComposeService) {
+			const ps = await docker(['compose', 'ps', '-q', dockerComposeService]);
+			container = ps.code === 0 ? ps.stdout.trim().split(/\r?\n/)[0] : undefined;
+		}
+		if (!container) {
+			return [];
+		}
+		const result = await docker(['port', container]);
+		return result.code === 0 ? parseExposedAddresses(result.stdout) : [];
 	}
 }
 

@@ -1,5 +1,5 @@
 import { Config } from './config';
-import { databaseName, withDatabase } from './dbUrl';
+import { databaseName, isSqliteUrl, withDatabase } from './dbUrl';
 import { EnvMap } from './envFile';
 import { testDatabaseName } from './names';
 import { PlaceholderContext, resolveAll } from './placeholders';
@@ -17,18 +17,34 @@ export interface MainDatabase {
 	url: string;
 }
 
-/** Main database from the first URL variable. Throws a readable error when it can't be found. */
+/**
+ * Main database: the URL entered in the extension, else the first URL variable of the env file.
+ * Throws a readable error when it can't be found or doesn't fit `database.engine`.
+ */
 export function mainDatabase(config: Config, env: ProjectEnv): MainDatabase {
 	const variable = config.database.urlVariables[0];
-	const url = variable ? env.main[variable] : undefined;
+	const url = config.database.url || (variable ? env.main[variable] : undefined);
+	const source = config.database.url ? 'The connection URL' : `${variable} in ${config.envFile}`;
 	if (!url) {
 		throw new Error(`${variable ?? 'The database URL variable'} is not set in ${config.envFile}.`);
 	}
+	const sqlite = isSqliteUrl(url);
+	if (config.database.engine === 'sqlite' && !sqlite) {
+		throw new Error(`${source} isn't a SQLite URL (e.g. sqlite:///data/app.db, file:./dev.db or a path ending in .db), but the engine is SQLite.`);
+	}
+	if (config.database.engine === 'postgres' && sqlite) {
+		throw new Error(`${source} is a SQLite URL, but the engine is PostgreSQL.`);
+	}
 	const name = databaseName(url);
 	if (!name) {
-		throw new Error(`${variable} in ${config.envFile} has no database name.`);
+		throw new Error(`${source} has no database name.`);
 	}
 	return { name, url };
+}
+
+/** The engine `url` needs: SQLite for SQLite URLs, PostgreSQL for everything else. */
+export function engineKind(url: string): 'postgres' | 'sqlite' {
+	return isSqliteUrl(url) ? 'sqlite' : 'postgres';
 }
 
 export function testDatabasesEnabled(config: Config): boolean {
@@ -59,9 +75,11 @@ export function testDatabaseFor(config: Config, env: ProjectEnv, database: strin
 export function databaseOverrides(config: Config, env: ProjectEnv, database: string, isMain: boolean): EnvMap {
 	const overrides: EnvMap = {};
 	const main = mainDatabase(config, env);
-	for (const variable of config.database.urlVariables) {
-		overrides[variable] = withDatabase(env.main[variable] || main.url, database);
-	}
+	config.database.urlVariables.forEach((variable, index) => {
+		// A URL entered in the extension replaces the env file's main variable.
+		const base = index === 0 && config.database.url ? main.url : env.main[variable] || main.url;
+		overrides[variable] = withDatabase(base, database);
+	});
 	if (testDatabasesEnabled(config)) {
 		const [first] = config.testDatabase.urlVariables;
 		const testBase = env.test[first];
@@ -136,12 +154,13 @@ export function buildCommandEnv(options: CommandEnvOptions): EnvMap {
 
 /**
  * Only what the extension adds on top of the user's environment, for terminals and debug sessions.
+ * The env file is left out unless both `loadEnvFileIntoCommands` and `loadEnvFileIntoTerminals` are on.
  */
 export function buildEnvAdditions(options: Omit<CommandEnvOptions, 'scriptEnv' | 'inputs' | 'extra'>): EnvMap {
 	const { config, env } = options;
 	const context = placeholderContext(config, env, options.processEnv, options.database, options.isMain, options.branch);
 	return {
-		...(config.loadEnvFileIntoCommands ? env.main : {}),
+		...(config.loadEnvFileIntoCommands && config.loadEnvFileIntoTerminals ? env.main : {}),
 		...databaseOverrides(config, env, options.database, options.isMain),
 		...resolveAll(config.env, context),
 	};
