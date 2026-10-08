@@ -19,7 +19,7 @@ suite('Extension (in VS Code)', function () {
 
 	test('registers its commands', async () => {
 		const commands = await vscode.commands.getCommands(true);
-		for (const name of ['newDatabase', 'migrate', 'switchDatabase', 'switchBack', 'removeDatabase', 'cleanUpDatabases', 'runMigrations', 'runScript', 'startDatabase', 'connectDatabase', 'refresh', 'openSettings']) {
+		for (const name of ['newDatabase', 'migrate', 'switchDatabase', 'switchBack', 'removeDatabase', 'cleanUpDatabases', 'runMigrations', 'runScript', 'startDatabase', 'connectDatabase', 'refresh', 'openSettings', 'configure']) {
 			assert.ok(commands.includes(`automated-processes.${name}`), name);
 		}
 	});
@@ -87,5 +87,17 @@ suite('Extension (in VS Code)', function () {
 
 	test('the sidebar view opens', async () => {
 		await vscode.commands.executeCommand('automatedProcesses.sidebar.focus');
+	});
+
+	test('the Configure panel opens as an editor tab', async () => {
+		await vscode.commands.executeCommand('automated-processes.configure', 'scripts');
+		// The tab shows up a moment after the panel is created.
+		const labels = () => vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label));
+		for (let tries = 0; tries < 40 && !labels().includes('Automated Processes: Configure'); tries++) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+		assert.ok(tabs.some((tab) => tab.label === 'Automated Processes: Configure'), tabs.map((tab) => tab.label).join(', '));
+		await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 	});
 });

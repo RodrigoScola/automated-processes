@@ -1,8 +1,9 @@
 # Automated Processes
 
-A VS Code extension that gives each git branch its own PostgreSQL database and turns project
-scripts into sidebar buttons. It knows nothing about any particular project: everything
-project-specific is a VS Code setting (`automatedProcesses.*`).
+A VS Code extension that gives each git branch its own PostgreSQL or SQLite database and turns
+project scripts into sidebar buttons. It knows nothing about any particular project: everything
+project-specific is a setting, edited in the **Configure** panel or as `automatedProcesses.*` in
+`settings.json`.
 
 - **Per-branch databases.** `New Database` copies the main database for the current branch and
   runs migrations on it. Switching branches switches the database. **Export Data** copies any
@@ -13,16 +14,40 @@ project-specific is a VS Code setting (`automatedProcesses.*`).
   passed to commands, for tools that only read real environment variables.
 - **Script buttons.** Steps run one after another as VS Code tasks and stop at the first
   failure. The sidebar shows each step's state.
+- **Servers.** Run, debug, restart and stop buttons for your app's servers. Every `launch`
+  configuration in `.vscode/launch.json` is one, listed first.
 
 The design and decisions are in [PLAN.md](PLAN.md).
+
+## Configure panel
+
+The gear in the sidebar (or **Automated Processes: Configure Database, Servers and Scripts**) opens
+an editor tab with three tabs:
+
+- **Database:** the engine (PostgreSQL, SQLite or detect from the URL), where the connection URL
+  comes from (the env file, or typed in; a typed URL is kept in VS Code's secret storage), where
+  the PostgreSQL tools run (this machine, a Docker container or a Compose service), and the main
+  branches. **Test connection** checks it.
+- **Servers:** add, edit and delete servers (name, run command, launch.json configuration to
+  debug with, restart on database change). launch.json configurations show up by themselves;
+  editing one adds a run command to it.
+- **Scripts:** add, edit, reorder and delete scripts and their steps, variables and dropdowns.
+
+What you save there is kept in the extension's storage for this workspace, on your machine, and
+overrides the same keys from `settings.json`. Nothing in the repository changes. Each tab has
+**Use settings.json instead** to go back.
+
+The sidebar lists only the main and the current database; **Show all databases** lists the rest.
 
 ## Requirements
 
 - PostgreSQL, either in Docker (`database.dockerContainer` or `database.dockerComposeService`; nothing to
   install locally) or with `psql`, `pg_dump` and `pg_restore` on PATH. In Docker, a stopped database
   container is started when the extension starts; if Docker itself isn't running, the sidebar shows
-  a Retry button for when it is.
-- The user in the database URL needs the `CREATEDB` permission.
+  a Retry button for when it is. The user in the database URL needs the `CREATEDB` permission.
+- Or SQLite: nothing to install. Each database is a file next to the main one, with the same
+  extension (`app.db` → `app_347.db`); copies are file copies. Only **Sync Migrations** needs the
+  `sqlite3` command line tool.
 
 ## Settings
 
@@ -35,7 +60,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
 | `applyToTerminals` | `true` | Current database in new terminals |
 | `applyToDebugSessions` | `true` | Current database in debug sessions of this folder (overrides the launch configuration's `envFile`) |
 | `echoCommands` | `true` | Print each command, placeholders filled in, at the top of its terminal |
+| `database.engine` | `auto` | `auto` (SQLite for SQLite URLs, else PostgreSQL) / `postgres` / `sqlite` |
 | `database.urlVariables` | `["DATABASE_URL"]` | Variables pointed at the current database; the first defines main |
+| `database.sqliteFolder` | `""` | SQLite: folder relative paths start from (e.g. `prisma`); empty = workspace |
 | `database.mainBranches` | `["main"]` | Branches that use the main database |
 | `database.dockerContainer` | `""` | Run Postgres tools in this container (`docker exec`) |
 | `database.dockerComposeService` | `""` | Or in this Compose service (`docker compose exec`) |
@@ -59,6 +86,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 | `onGitUpdate.whenFilesChange` | `[]` | Only when these files changed (e.g. `uv.lock`, `package-lock.json`) |
 | `onGitUpdate.skipMainBranches` | `false` | Don't run it on the main branches |
 | `server.onDatabaseChange` | `restart` | `restart` / `ask` / `off`: restart the server and running debug sessions when the database changes |
+| `server.includeLaunchConfigurations` | `true` | launch.json `launch` configurations are servers too (listed first) |
 | `scripts` | `[]` | Sidebar script buttons |
 
 Placeholders in commands and `env`: `${db.name}`, `${db.url}`, `${db.mainName}`, `${db.mainUrl}`,

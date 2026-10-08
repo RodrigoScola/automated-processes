@@ -86,6 +86,10 @@ The strictest setup, in user settings:
   `parse()`), `@vscode-elements/elements` and `@vscode/codicons`.
 - The sidebar webview has a strict Content Security Policy (scripts by nonce only) and escapes
   every value it renders.
+- Values saved in the **Configure** panel (added after this review) stay in the extension's
+  workspace storage on this machine, never in the repository. A connection URL typed there goes
+  to VS Code's secret storage (the OS keychain), and the panel only ever shows it with the
+  password hidden.
 - Terminal variables are not persisted (`environmentVariableCollection.persistent = false`), so
   `.env` values aren't written to VS Code's storage. Branch links in workspace storage hold no
   secrets.
