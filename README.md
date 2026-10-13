@@ -40,8 +40,12 @@ servers also run when there's no database connection, just without the database 
 Scripts and servers run in background terminals: the terminal panel and focus stay where they
 are. Their **output** links (or `revealTerminal`) show them.
 
-The Database view lists only the main and the current database; **Show all databases** lists the
-rest.
+The Database view lists only the main and the current database; the **Show all databases** option
+(`database.showAllDatabases`) lists the rest. The main database has an outline.
+
+Each database's plug button uses it **for now**: commands, terminals and servers get it, but the
+branch stays linked to its own database. **Go back** on the card, a branch switch or a reload
+returns to the branch's database. The arrow button links the branch to the database for good.
 
 ## Configure panel
 
@@ -105,6 +109,7 @@ your machine and override the same keys from `settings.json`; nothing in the rep
 | `database.autoStartContainer` | `true` | Start a stopped database container on startup and Retry without asking |
 | `database.warnIfPortExposed` | `true` | Warn when the container publishes its port on every network interface |
 | `database.hidePatterns` | `["postgres"]` | Databases hidden from the list (globs) |
+| `database.showAllDatabases` | `false` | List every database, not only main and the current one |
 | `database.newNamePattern` | `{main}_{branchShort}` | Suggested new database name (`{main}`, `{branch}`, `{branchShort}`, `{issue}`) |
 | `database.importDataOnCreate` | `true` | New Database imports the main database (schema and data); off = empty database + migrations |
 | `database.onBranchMerged` | `delete` | `delete` or `keep` databases of merged/deleted branches |

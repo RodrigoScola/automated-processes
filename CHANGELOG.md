@@ -16,7 +16,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - SQLite support (`database.engine`, `database.sqliteFolder`): per-branch databases are file copies.
 - launch.json `launch` configurations show up as servers, listed first
   (`server.includeLaunchConfigurations`).
-- The sidebar lists only the main and current database, with **Show all databases** for the rest.
+- The sidebar lists only the main and current database; the **Show all databases** option
+  (`database.showAllDatabases`) lists the rest. The main database is marked with an outline.
+- **Use for now** (plug button on a database, or **Use Database Temporarily**): use another database
+  without relinking the branch. Switching branches, reloading or **Go back** returns to the
+  branch's own database.
 - The sidebar is four resizable, collapsible views: Database, Servers, Scripts and Settings.
 - Scripts and servers run in background terminals without taking focus (`revealTerminal`).
 - Configure panel: **Save for** this workspace or all workspaces; **Add defaults** detects servers,

@@ -92,6 +92,8 @@ export interface Config {
 		/** Warn when the database container publishes its port on every network interface. */
 		warnIfPortExposed: boolean;
 		hidePatterns: string[];
+		/** List every database, not only the main and the current one. */
+		showAllDatabases: boolean;
 		newNamePattern: string;
 		/** New Database copies the main database's data (and schema) into the new one. */
 		importDataOnCreate: boolean;
@@ -198,6 +200,7 @@ export const DEFAULT_CONFIG: Config = {
 		autoStartContainer: true,
 		warnIfPortExposed: true,
 		hidePatterns: ['postgres'],
+		showAllDatabases: false,
 		newNamePattern: '{main}_{branchShort}',
 		importDataOnCreate: true,
 		onBranchMerged: 'delete',
@@ -261,6 +264,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 			autoStartContainer: bool(read('database.autoStartContainer'), d.database.autoStartContainer),
 			warnIfPortExposed: bool(read('database.warnIfPortExposed'), d.database.warnIfPortExposed),
 			hidePatterns: strList(read('database.hidePatterns'), d.database.hidePatterns, true),
+			showAllDatabases: bool(read('database.showAllDatabases'), d.database.showAllDatabases),
 			newNamePattern: str(read('database.newNamePattern'), d.database.newNamePattern),
 			importDataOnCreate: bool(read('database.importDataOnCreate'), d.database.importDataOnCreate),
 			onBranchMerged: oneOf(read('database.onBranchMerged'), ['delete', 'keep'], d.database.onBranchMerged),

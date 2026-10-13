@@ -68,6 +68,8 @@ export interface ViewState {
 		isMain: boolean;
 		linked: boolean;
 		mainName: string;
+		/** Set while another database is used temporarily: the one the branch itself uses. */
+		branchDatabase?: string;
 		previous?: string;
 		testName?: string;
 		createdAt?: string;
@@ -76,7 +78,7 @@ export interface ViewState {
 	};
 	dbStatus: 'unknown' | 'loading' | 'ok' | 'error';
 	dbError?: string;
-	/** Databases to list: main and current only, unless `showAll`. */
+	/** Databases to list: main and current only, unless `showAll` (the `database.showAllDatabases` setting). */
 	databases: ViewDatabase[];
 	hiddenCount: number;
 	showHidden: boolean;
@@ -110,6 +112,8 @@ export type CommandName =
 	| 'backupDatabase'
 	| 'switchDatabase'
 	| 'switchBack'
+	| 'useDatabaseTemporarily'
+	| 'stopTemporaryDatabase'
 	| 'removeDatabase'
 	| 'cleanUpDatabases'
 	| 'runMigrations'

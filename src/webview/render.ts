@@ -216,14 +216,24 @@ function renderCurrentCard(state: ViewState, now: number): string {
       `<div class="meta">${icon("history")}<span>copied from ${e(current.lastCopiedFrom)} · ${e(relativeTime(current.lastCopiedAt, now))}</span></div>`,
     );
   }
-  if (current.previous && current.previous !== current.name) {
+  if (current.branchDatabase) {
+    rows.push(`<div class="meta meta-action">${icon("git-branch")}<span class="truncate">branch uses ${e(current.branchDatabase)}</span>
+			<button class="link" data-command="stopTemporaryDatabase" title="Go back to ${e(current.branchDatabase)}">Go back</button></div>`);
+  } else if (current.previous && current.previous !== current.name) {
     rows.push(`<div class="meta meta-action">${icon("discard")}<span class="truncate">previous: ${e(current.previous)}</span>
 			<button class="link" data-command="switchBack" title="Switch back to ${e(current.previous)}">Switch back</button></div>`);
   }
-  const badge = current.isMain
-    ? '<span class="pill pill-main">main</span>'
-    : '<span class="pill pill-branch">branch</span>';
-  return `<div class="card${current.isMain && state.branch && !state.isMainBranch ? " card-warn" : ""}">
+  const badge = current.branchDatabase
+    ? '<span class="pill pill-temporary" title="Used for now; the branch keeps its own database">temporary</span>'
+    : current.isMain
+      ? '<span class="pill pill-main">main</span>'
+      : '<span class="pill pill-branch">branch</span>';
+  const tone = current.branchDatabase
+    ? " card-temporary"
+    : current.isMain && state.branch && !state.isMainBranch
+      ? " card-warn"
+      : "";
+  return `<div class="card${tone}">
 		<div class="card-title">${icon("database")}<span class="truncate db-name" title="${e(current.name)}">${e(current.name)}</span>${badge}</div>
 		${rows.join("")}
 	</div>`;
@@ -236,37 +246,45 @@ function renderDatabaseList(state: ViewState): string {
   if (state.dbStatus === "error") {
     return `<div class="hint hint-error" title="${e(state.dbError ?? "")}">${e(shorten(state.dbError ?? "Database unavailable.", 160))}</div>`;
   }
+  const branchDatabase = state.current?.branchDatabase;
   const rows = state.databases
-    .map((db) => renderDatabaseRow(db, Boolean(state.busy)))
+    .map((db) => renderDatabaseRow(db, Boolean(state.busy), branchDatabase))
     .join("");
-  // Main and current only, until "Show all" is ticked; hidden ones only matter then.
-  const showAll =
-    state.showAll || state.moreCount > 0
-      ? `<vscode-checkbox class="hidden-toggle" data-toggle="showAll"${state.showAll ? " checked" : ""}>Show all databases${state.showAll ? "" : ` (${state.moreCount} more)`}</vscode-checkbox>`
-      : "";
+  // Main and current only, unless the "Show all databases" option is on; hidden ones only matter then.
   const hidden =
     state.showAll && state.hiddenCount > 0
       ? `<vscode-checkbox class="hidden-toggle" data-toggle="showHidden"${state.showHidden ? " checked" : ""}>Show hidden (${state.hiddenCount})</vscode-checkbox>`
       : "";
-  return `<div class="subheader">Databases</div><ul class="db-list" role="list">${rows}</ul>${showAll}${hidden}`;
+  return `<div class="subheader">Databases</div><ul class="db-list" role="list">${rows}</ul>${hidden}`;
 }
 
-function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
-  const marker = db.isMain
-    ? icon("star-full", "marker marker-main")
-    : db.isCurrent
-      ? icon("circle-filled", "marker marker-current")
-      : icon("circle-outline", "marker");
-  const detail = db.isMain
-    ? "main"
-    : db.branches.length
-      ? db.branches.join(", ")
-      : "not linked";
+function renderDatabaseRow(
+  db: ViewDatabase,
+  busy: boolean,
+  branchDatabase: string | undefined,
+): string {
+  const marker = db.isCurrent
+    ? icon("circle-filled", "marker marker-current")
+    : icon("circle-outline", "marker");
+  const temporary = db.isCurrent && branchDatabase !== undefined;
+  const detail = [
+    db.isMain ? "main" : db.branches.length ? db.branches.join(", ") : "not linked",
+    temporary ? "in use for now" : db.name === branchDatabase ? "this branch's" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const n = e(db.name);
   const actions = busy
     ? ""
     : [
         db.isCurrent
+          ? ""
+          : iconButton(
+              "plug",
+              `Use ${db.name} for now (the branch keeps its own database)`,
+              `data-command="useDatabaseTemporarily" data-database="${n}"`,
+            ),
+        db.isCurrent && !temporary
           ? ""
           : iconButton(
               "arrow-right",
@@ -296,7 +314,7 @@ function renderDatabaseRow(db: ViewDatabase, busy: boolean): string {
               `data-command="removeDatabase" data-database="${n}"`,
             ),
       ].join("");
-  return `<li class="db-row${db.isCurrent ? " is-current" : ""}${db.hidden ? " is-hidden" : ""}">
+  return `<li class="db-row${db.isMain ? " is-main" : ""}${db.isCurrent ? " is-current" : ""}${temporary ? " is-temporary" : ""}${db.hidden ? " is-hidden" : ""}"${db.isMain ? ' title="Main database"' : ""}>
 		${marker}
 		<div class="db-text"><span class="truncate db-name" title="${n}">${n}</span><span class="truncate db-detail" title="${e(detail)}">${e(detail)}</span></div>
 		<div class="row-actions">${actions}</div>
@@ -549,6 +567,12 @@ function renderFooter(state: ViewState): string {
 			<vscode-single-select class="branch-mode" data-import-data aria-label="Import data on database creation">
 				<vscode-option value="on"${state.importDataOnCreate ? " selected" : ""}>on</vscode-option>
 				<vscode-option value="off"${state.importDataOnCreate ? "" : " selected"}>off</vscode-option>
+			</vscode-single-select>
+		</label>
+		<label class="footer-row"><span title="List every database in the Database view. Off: only the main and the current database.">Show all databases</span>
+			<vscode-single-select class="branch-mode" data-show-all aria-label="Show all databases">
+				<vscode-option value="on"${state.showAll ? " selected" : ""}>on</vscode-option>
+				<vscode-option value="off"${state.showAll ? "" : " selected"}>off</vscode-option>
 			</vscode-single-select>
 		</label>
 		<label class="footer-row"><span title="When the current database changes, restart the server started from here and running debug sessions so they use it.">Restart server on database change</span>

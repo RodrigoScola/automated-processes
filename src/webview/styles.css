@@ -10,6 +10,7 @@
 	--ap-warn: var(--vscode-editorWarning-foreground, #cca700);
 	--ap-accent: var(--vscode-focusBorder);
 	--ap-star: var(--vscode-charts-yellow, #e2c08d);
+	--ap-temporary: var(--vscode-charts-purple, #b180d7);
 }
 
 body {
@@ -78,6 +79,11 @@ body {
 	border-left-color: var(--ap-warn);
 }
 
+.card-temporary {
+	border-left-color: var(--ap-temporary);
+	border-left-style: dashed;
+}
+
 .card-title {
 	display: flex;
 	align-items: center;
@@ -125,6 +131,7 @@ body {
 }
 
 .pill-main { background: color-mix(in srgb, var(--ap-star) 25%, transparent); color: var(--vscode-foreground); }
+.pill-temporary { background: color-mix(in srgb, var(--ap-temporary) 25%, transparent); color: var(--vscode-foreground); }
 .pill-branch { background: color-mix(in srgb, var(--ap-accent) 25%, transparent); color: var(--vscode-foreground); }
 .pill-passed { background: color-mix(in srgb, var(--ap-pass) 22%, transparent); color: var(--vscode-foreground); }
 .pill-failed { background: color-mix(in srgb, var(--ap-fail) 25%, transparent); color: var(--vscode-foreground); }
@@ -212,6 +219,18 @@ body {
 	background: var(--vscode-list-inactiveSelectionBackground);
 }
 
+/* Main: a quiet outline instead of an icon, so it reads as the anchor without shouting. */
+.db-row.is-main {
+	outline: 1px solid var(--ap-border);
+	outline-offset: -1px;
+}
+
+/* Used for now: a dashed outline, since it isn't the branch's own. */
+.db-row.is-temporary {
+	outline: 1px dashed color-mix(in srgb, var(--ap-temporary) 70%, transparent);
+	outline-offset: -1px;
+}
+
 .db-row.is-hidden {
 	opacity: 0.6;
 }
@@ -222,7 +241,6 @@ body {
 	color: var(--ap-muted);
 }
 
-.marker-main { color: var(--ap-star); }
 .marker-current { color: var(--ap-accent); }
 
 .db-text {

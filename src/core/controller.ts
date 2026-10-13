@@ -66,7 +66,6 @@ interface Ready {
 const MAINTENANCE_DATABASES = ['postgres', 'template0', 'template1'];
 const PREF_INPUTS = 'automatedProcesses.inputs';
 const PREF_SHOW_HIDDEN = 'automatedProcesses.showHidden';
-const PREF_SHOW_ALL = 'automatedProcesses.showAllDatabases';
 const MIGRATIONS_SCRIPT_ID = '__migrations';
 
 export class Controller {
@@ -83,6 +82,13 @@ export class Controller {
 	private busy: string | undefined;
 	private problems: string[] = [];
 	private current: CurrentDatabase | undefined;
+	/**
+	 * A database used for now instead of the branch's own, without relinking the branch. Kept in
+	 * memory only: a branch switch, a reload or linking a database ends it.
+	 */
+	private temporary: string | undefined;
+	/** The database the branch itself uses, while `temporary` overrides it. */
+	private branchDatabase: string | undefined;
 	private mainName: string | undefined;
 	private checkingBranches = false;
 	/** The current database changed; running servers should restart once the action finishes. */
@@ -177,6 +183,7 @@ export class Controller {
 		}
 		const previousBranch = this.lastBranch;
 		this.lastBranch = branch;
+		this.temporary = undefined;
 		await this.refresh();
 		if (previousBranch !== undefined && branch !== undefined) {
 			// When migrations run by themselves, restart after them so the server sees the new schema.
@@ -201,6 +208,7 @@ export class Controller {
 		this.problems = [...problems];
 		this.current = undefined;
 		this.mainName = undefined;
+		this.branchDatabase = undefined;
 		this.exposedAddresses = [];
 		if (!root) {
 			this.deps.envSink.apply(undefined, { terminals: false, debugSessions: false, description: '' });
@@ -229,6 +237,12 @@ export class Controller {
 		const branch = this.deps.git.currentBranch();
 		const data = this.deps.store.data();
 		this.current = resolveCurrent(branch, data.links, main.name);
+		if (this.temporary !== undefined && this.temporary !== this.current.database) {
+			this.branchDatabase = this.current.database;
+			this.current = { database: this.temporary, isMain: this.temporary === main.name, linked: this.current.linked };
+		} else {
+			this.temporary = undefined;
+		}
 		const switched = await this.deps.store.setCurrent(this.current.database);
 		if (switched && this.initialized) {
 			this.restartPending = true;
@@ -284,7 +298,7 @@ export class Controller {
 		const data = this.deps.store.data();
 		const branch = this.deps.git.currentBranch();
 		const showHidden = this.deps.prefs.get<boolean>(PREF_SHOW_HIDDEN) ?? false;
-		const showAll = this.deps.prefs.get<boolean>(PREF_SHOW_ALL) ?? false;
+		const showAll = config.database.showAllDatabases;
 		const mainName = this.mainName;
 		const current = this.current;
 
@@ -298,7 +312,7 @@ export class Controller {
 			isCurrent: name === current?.database,
 			isPrevious: name === data.previous,
 			branches: linkedBranches.get(name) ?? [],
-			hidden: name !== mainName && name !== current?.database && matchesAnyGlob(name, config.database.hidePatterns),
+			hidden: name !== mainName && name !== current?.database && name !== this.branchDatabase && matchesAnyGlob(name, config.database.hidePatterns),
 		}));
 		// Main first, then the current one, then the rest by name.
 		all.sort((a, b) => Number(b.isMain) - Number(a.isMain)
@@ -316,7 +330,7 @@ export class Controller {
 		const meta = current ? data.meta[current.database] ?? {} : {};
 		// By default only the two that matter are listed: main and the current one.
 		const visible = showHidden ? all : all.filter((db) => !db.hidden);
-		const listed = showAll ? visible : visible.filter((db) => db.isMain || db.isCurrent);
+		const listed = showAll ? visible : visible.filter((db) => db.isMain || db.isCurrent || db.name === this.branchDatabase);
 		const inputs = this.deps.prefs.get<Record<string, Record<string, string>>>(PREF_INPUTS) ?? {};
 
 		return {
@@ -331,6 +345,7 @@ export class Controller {
 					isMain: current.isMain,
 					linked: current.linked,
 					mainName,
+					branchDatabase: this.branchDatabase,
 					previous: data.previous,
 					testName,
 					createdAt: meta.createdAt,
@@ -423,7 +438,7 @@ export class Controller {
 				message: `The "${docker?.name ?? 'database'}" container publishes ${this.exposedAddresses.join(', ')} on every network interface, so other machines on your network can reach the database. Publish it on 127.0.0.1 only (e.g. "127.0.0.1:5432:5432" in the Compose file).`,
 			});
 		}
-		if (this.current && !this.current.linked && branch && !isMainBranch(branch, config.database.mainBranches)) {
+		if (this.current && !this.temporary && !this.current.linked && branch && !isMainBranch(branch, config.database.mainBranches)) {
 			warnings.push({
 				message: `"${branch}" has no database of its own and is using the main database.`,
 				action: { label: 'New Database', command: 'newDatabase' },
@@ -474,6 +489,7 @@ export class Controller {
 			}
 			const tips = await this.deps.git.localBranches().catch(() => new Map<string, string>());
 			await this.deps.store.link(branch, name, tips.get(branch));
+			this.temporary = undefined;
 			const stamp = new Date(this.now()).toISOString();
 			await this.deps.store.updateMeta(name, importData
 				? { createdAt: stamp, lastCopiedFrom: ready.main.name, lastCopiedAt: stamp }
@@ -563,6 +579,38 @@ export class Controller {
 		});
 	}
 
+	/** Uses `name` for now, leaving the branch linked to its own database. */
+	async useDatabaseTemporarily(name?: string): Promise<void> {
+		await this.guard('Switching database', async () => {
+			const ready = this.ready();
+			const databases = (await ready.engine.listDatabases()).filter((db) => !MAINTENANCE_DATABASES.includes(db));
+			const chosen = name ?? await this.deps.ui.pickOne(
+				this.databaseItems(databases, ready, this.current?.database),
+				'Use which database for now?',
+				'The branch keeps its own database; switching branches or reloading goes back to it',
+			);
+			if (!chosen) {
+				return;
+			}
+			if (!databases.includes(chosen)) {
+				throw new UserError(`Database "${chosen}" doesn't exist.`);
+			}
+			this.temporary = chosen;
+			await this.refresh();
+		});
+	}
+
+	/** Goes back to the branch's own database after `useDatabaseTemporarily`. */
+	async stopTemporaryDatabase(): Promise<void> {
+		if (this.temporary === undefined) {
+			return;
+		}
+		await this.guard('Switching database', async () => {
+			this.temporary = undefined;
+			await this.refresh();
+		});
+	}
+
 	async switchBack(): Promise<void> {
 		const previous = this.deps.store.data().previous;
 		if (!previous) {
@@ -603,6 +651,9 @@ export class Controller {
 				}
 			});
 			await this.deps.store.forgetDatabase(chosen);
+			if (this.temporary === chosen) {
+				this.temporary = undefined;
+			}
 			await this.refresh();
 			void this.deps.ui.info(`Dropped ${drops.join(', ')}.`);
 		});
@@ -613,7 +664,7 @@ export class Controller {
 			const ready = this.ready();
 			const databases = await ready.engine.listDatabases();
 			const current = this.current?.database ?? ready.main.name;
-			const protectedNames = new Set([ready.main.name, current, ...MAINTENANCE_DATABASES]);
+			const protectedNames = new Set([ready.main.name, current, ...(this.branchDatabase ? [this.branchDatabase] : []), ...MAINTENANCE_DATABASES]);
 			const currentTest = testDatabaseFor(ready.config, ready.env, current, current === ready.main.name)?.name;
 			if (currentTest) {
 				protectedNames.add(currentTest);
@@ -1237,8 +1288,7 @@ export class Controller {
 	}
 
 	async setShowAll(value: boolean): Promise<void> {
-		await this.deps.prefs.update(PREF_SHOW_ALL, value);
-		this.changed();
+		await this.deps.settings.update('database.showAllDatabases', value);
 	}
 
 	async setShowHidden(value: boolean): Promise<void> {
@@ -1436,6 +1486,7 @@ export class Controller {
 	}
 
 	private async linkCurrentBranch(ready: Ready, branch: string, database: string): Promise<void> {
+		this.temporary = undefined;
 		if (database === ready.main.name) {
 			await this.deps.store.unlink(branch);
 		} else {
@@ -1461,7 +1512,7 @@ export class Controller {
 			}
 			const branches = Object.entries(data.links).filter(([, link]) => link.database === db).map(([branch]) => branch);
 			return {
-				label: db === ready.main.name ? `$(star-full) ${db}` : db === this.current?.database ? `$(circle-filled) ${db}` : db,
+				label: db === this.current?.database ? `$(circle-filled) ${db}` : db,
 				description: tags.join(' · ') || undefined,
 				detail: branches.length ? `Branch: ${branches.join(', ')}` : undefined,
 				value: db,

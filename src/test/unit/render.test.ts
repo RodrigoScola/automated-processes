@@ -73,7 +73,10 @@ suite('renderApp', () => {
 		assert.match(html, /test: app_347_test/);
 		assert.match(html, /copied from app · 2 h ago/);
 		assert.match(html, /data-command="switchBack"/);
-		assert.match(html, /star-full/);
+		assert.match(html, /<li class="db-row is-main"/);
+		assert.ok(!/star-full/.test(html), 'main is marked by an outline, not a star');
+		assert.match(html, /data-command="useDatabaseTemporarily" data-database="app"/);
+		assert.ok(!/data-command="useDatabaseTemporarily" data-database="app_347"/.test(html), 'not for the current one');
 		assert.match(html, /data-migrate-from="app_347"/);
 		assert.ok(!/data-command="removeDatabase" data-database="app"/.test(html), 'main has no drop action');
 	});
@@ -144,10 +147,28 @@ suite('renderApp', () => {
 		assert.ok(!/Show hidden/.test(renderApp(state({ hiddenCount: 3 }))), 'hidden ones only matter once all are shown');
 	});
 
-	test('the list offers the databases beyond main and current', () => {
-		assert.match(renderApp(state({ moreCount: 4 })), /data-toggle="showAll">Show all databases \(4 more\)/);
-		assert.match(renderApp(state({ showAll: true })), /data-toggle="showAll" checked>Show all databases</);
-		assert.ok(!/data-toggle="showAll"/.test(renderApp(state())), 'nothing more to show');
+	test('showing all databases is an option, not part of the list', () => {
+		assert.ok(!/data-toggle="showAll"/.test(renderApp(state({ moreCount: 4 }))));
+		assert.match(renderApp(state(), NOW, 'options'), /data-show-all[^>]*>\s*<vscode-option value="on">on<\/vscode-option>\s*<vscode-option value="off" selected>/);
+		assert.match(renderApp(state({ showAll: true }), NOW, 'options'), /<vscode-option value="on" selected>on/);
+	});
+
+	test("a temporary database is marked, with a way back to the branch's own", () => {
+		const html = renderApp(state({
+			current: { name: 'app_other', isMain: false, linked: true, mainName: 'app', branchDatabase: 'app_347', previous: 'app_347' },
+			databases: [
+				{ name: 'app', isMain: true, isCurrent: false, isPrevious: false, branches: [], hidden: false },
+				{ name: 'app_347', isMain: false, isCurrent: false, isPrevious: true, branches: ['347-carer-leaver'], hidden: false },
+				{ name: 'app_other', isMain: false, isCurrent: true, isPrevious: false, branches: [], hidden: false },
+			],
+		}));
+		assert.match(html, /pill-temporary/);
+		assert.match(html, /branch uses app_347/);
+		assert.match(html, /data-command="stopTemporaryDatabase"/);
+		assert.ok(!/data-command="switchBack"/.test(html), 'going back replaces switch back');
+		assert.match(html, /db-row is-current is-temporary/);
+		assert.match(html, /this branch&#39;s/);
+		assert.match(html, /data-command="switchDatabase" data-database="app_other"/, "can still be made the branch's own");
 	});
 
 	test('each sidebar view renders only its part', () => {

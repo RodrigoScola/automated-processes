@@ -9,8 +9,7 @@ const SESSION = { pid: 1, application: 'uvicorn', client: '172.18.0.1', user: 'a
 
 suite('Controller: refresh and view state', () => {
 	test('start resolves the current database, applies env and lists databases', async () => {
-		const h = harness({ databases: ['postgres', 'app', 'app_old', 'app_test_gw0'], config: testConfig({ database: { hidePatterns: ['postgres', '*_test_gw*'] }, migrations: { command: 'migrate' } }) });
-		await h.controller.setShowAll(true);
+		const h = harness({ databases: ['postgres', 'app', 'app_old', 'app_test_gw0'], config: testConfig({ database: { hidePatterns: ['postgres', '*_test_gw*'], showAllDatabases: true }, migrations: { command: 'migrate' } }) });
 		await h.controller.start();
 		const state = h.controller.snapshot();
 		assert.strictEqual(state.current?.name, 'app');
@@ -29,9 +28,8 @@ suite('Controller: refresh and view state', () => {
 	});
 
 	test('the list shows main first, then the current database, then the rest by name', async () => {
-		const h = harness({ databases: ['postgres', 'app', 'app_a', 'app_b', 'app_login', 'app_z'] });
+		const h = harness({ databases: ['postgres', 'app', 'app_a', 'app_b', 'app_login', 'app_z'], config: testConfig({ database: { showAllDatabases: true } }) });
 		await h.store.link('feature/login', 'app_login');
-		await h.controller.setShowAll(true);
 		await h.controller.start();
 		assert.deepStrictEqual(h.controller.snapshot().databases.map((db) => db.name), ['app', 'app_login', 'app_a', 'app_b', 'app_z']);
 	});
@@ -48,15 +46,16 @@ suite('Controller: refresh and view state', () => {
 		assert.strictEqual(state.showAll, false);
 
 		await h.controller.setShowAll(true);
+		assert.deepStrictEqual(h.settings.updates, [['database.showAllDatabases', true]]);
+		h.config.database.showAllDatabases = true;
 		state = h.controller.snapshot();
 		assert.deepStrictEqual(state.databases.map((db) => db.name), ['app', 'app_login', 'app_a', 'app_b']);
 		assert.strictEqual(state.moreCount, 0);
 	});
 
 	test('showing hidden databases is remembered', async () => {
-		const h = harness({ databases: ['postgres', 'app'] });
+		const h = harness({ databases: ['postgres', 'app'], config: testConfig({ database: { showAllDatabases: true } }) });
 		await h.controller.start();
-		await h.controller.setShowAll(true);
 		await h.controller.setShowHidden(true);
 		assert.deepStrictEqual(h.controller.snapshot().databases.map((db) => db.name), ['app', 'postgres']);
 	});
@@ -399,6 +398,47 @@ suite('Controller: switching', () => {
 		await h.controller.start();
 		await h.controller.switchDatabase('ghost');
 		assert.match(h.ui.messages('error')[0], /doesn't exist/);
+	});
+
+	test('a database used temporarily leaves the branch link alone', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'app_login', 'other'] });
+		await h.store.link('feature/login', 'app_login');
+		await h.controller.start();
+		await h.controller.useDatabaseTemporarily('other');
+		let state = h.controller.snapshot();
+		assert.strictEqual(state.current?.name, 'other');
+		assert.strictEqual(state.current?.branchDatabase, 'app_login');
+		assert.strictEqual(h.store.linkOf('feature/login')?.database, 'app_login');
+		assert.match(h.envSink.last?.additions?.DATABASE_URL ?? '', /\/other$/);
+		assert.deepStrictEqual(state.databases.map((db) => db.name), ['app', 'other', 'app_login'], "the branch's own stays listed");
+
+		await h.controller.refresh();
+		assert.strictEqual(h.controller.snapshot().current?.name, 'other', 'survives a refresh');
+
+		await h.controller.stopTemporaryDatabase();
+		state = h.controller.snapshot();
+		assert.strictEqual(state.current?.name, 'app_login');
+		assert.strictEqual(state.current?.branchDatabase, undefined);
+	});
+
+	test('switching branches ends a temporary database', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other'] });
+		await h.controller.start();
+		await h.controller.useDatabaseTemporarily('other');
+		h.git.branch = 'main';
+		await h.controller.onGitStateChanged();
+		assert.strictEqual(h.controller.snapshot().current?.name, 'app');
+	});
+
+	test('switching database for the branch ends a temporary one', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other', 'third'] });
+		await h.controller.start();
+		await h.controller.useDatabaseTemporarily('other');
+		await h.controller.switchDatabase('third');
+		const state = h.controller.snapshot();
+		assert.strictEqual(state.current?.name, 'third');
+		assert.strictEqual(state.current?.branchDatabase, undefined);
+		assert.strictEqual(h.store.linkOf('feature/login')?.database, 'third');
 	});
 
 	test('switchBack without history says so', async () => {

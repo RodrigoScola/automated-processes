@@ -99,6 +99,16 @@
         "category": "Automated Processes"
       },
       {
+        "command": "automated-processes.useDatabaseTemporarily",
+        "title": "Use Database Temporarily",
+        "category": "Automated Processes"
+      },
+      {
+        "command": "automated-processes.stopTemporaryDatabase",
+        "title": "Stop Using Temporary Database",
+        "category": "Automated Processes"
+      },
+      {
         "command": "automated-processes.removeDatabase",
         "title": "Remove Database",
         "category": "Automated Processes"
@@ -399,6 +409,12 @@
           ],
           "order": 14,
           "markdownDescription": "Databases hidden from the list (glob patterns, e.g. `*_test`, `*_test_gw*`). Hidden databases are pre-selected in **Clean Up Databases**."
+        },
+        "automatedProcesses.database.showAllDatabases": {
+          "type": "boolean",
+          "default": false,
+          "order": 14,
+          "markdownDescription": "List every database in the Database view. Off: only the main and the current database."
         },
         "automatedProcesses.database.newNamePattern": {
           "type": "string",
