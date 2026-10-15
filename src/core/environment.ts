@@ -21,10 +21,22 @@ export interface MainDatabase {
 }
 
 /**
- * Main database: the URL entered in the extension, else the first URL variable of the env file.
- * Throws a readable error when it can't be found or doesn't fit `database.engine`.
+ * Main database: the one made the main with Make Main, else the one the connection URL points at.
+ * Throws a readable error when there's no URL or it doesn't fit `database.engine`.
  */
 export function mainDatabase(config: Config, env: ProjectEnv): MainDatabase {
+	const configured = configuredMainDatabase(config, env);
+	const promoted = config.database.mainDatabase;
+	return promoted && promoted !== configured.name
+		? { name: promoted, url: withDatabase(configured.url, promoted) }
+		: configured;
+}
+
+/**
+ * The database the connection URL points at: the URL entered in the extension, else the first URL
+ * variable of the env file. Throws a readable error when it can't be found or doesn't fit `database.engine`.
+ */
+export function configuredMainDatabase(config: Config, env: ProjectEnv): MainDatabase {
 	const variable = config.database.urlVariables[0];
 	const url = config.database.url || (variable ? env.main[variable] : undefined);
 	const source = config.database.url ? 'The connection URL' : `${variable} in ${config.envFile}`;

@@ -79,6 +79,11 @@ export interface Config {
 		engine: DatabaseEngineKind;
 		/** Main database URL entered in the extension; empty = read it from the env file. */
 		url: string;
+		/**
+		 * Database made the main with Make Main, instead of the one the URL points at; empty = that
+		 * one. Not a setting: the controller fills it in from workspace state.
+		 */
+		mainDatabase: string;
 		/** Folder relative SQLite paths are resolved against, relative to the workspace; empty = the workspace. */
 		sqliteFolder: string;
 		urlVariables: string[];
@@ -191,6 +196,7 @@ export const DEFAULT_CONFIG: Config = {
 	database: {
 		engine: 'auto',
 		url: '',
+		mainDatabase: '',
 		sqliteFolder: '',
 		urlVariables: ['DATABASE_URL'],
 		mainBranches: ['main'],
@@ -255,6 +261,7 @@ export function readConfig(read: SettingReader): ConfigResult {
 		database: {
 			engine: oneOf(read('database.engine'), ['auto', 'postgres', 'sqlite'], d.database.engine),
 			url: str(read('database.url'), d.database.url, true),
+			mainDatabase: d.database.mainDatabase,
 			sqliteFolder: str(read('database.sqliteFolder'), d.database.sqliteFolder, true),
 			urlVariables: strList(read('database.urlVariables'), d.database.urlVariables),
 			mainBranches: strList(read('database.mainBranches'), d.database.mainBranches),

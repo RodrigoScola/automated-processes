@@ -186,6 +186,7 @@ function registerCommands(controller: Controller, executor: TaskExecutor, panel:
 		switchBack: () => controller.switchBack(),
 		useDatabaseTemporarily: (name?: unknown) => controller.useDatabaseTemporarily(typeof name === 'string' ? name : undefined),
 		stopTemporaryDatabase: () => controller.stopTemporaryDatabase(),
+		makeMainDatabase: (name?: unknown) => controller.makeMainDatabase(typeof name === 'string' ? name : undefined),
 		removeDatabase: (name?: unknown) => controller.removeDatabase(typeof name === 'string' ? name : undefined),
 		cleanUpDatabases: () => controller.cleanUpDatabases(),
 		runMigrations: () => controller.runMigrations(),

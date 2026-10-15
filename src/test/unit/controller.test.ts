@@ -441,6 +441,54 @@ suite('Controller: switching', () => {
 		assert.strictEqual(h.store.linkOf('feature/login')?.database, 'third');
 	});
 
+	test('on a main branch, another database is used for now instead of becoming its main', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other'] });
+		h.git.branch = 'main';
+		await h.controller.start();
+		await h.controller.switchDatabase('other');
+		let state = h.controller.snapshot();
+		assert.strictEqual(state.current?.name, 'other');
+		assert.strictEqual(state.current?.branchDatabase, 'app');
+		assert.strictEqual(state.current?.mainName, 'app');
+		assert.strictEqual(h.store.linkOf('main'), undefined);
+
+		await h.controller.switchDatabase('app');
+		state = h.controller.snapshot();
+		assert.strictEqual(state.current?.name, 'app');
+		assert.strictEqual(state.current?.branchDatabase, undefined);
+	});
+
+	test('makeMainDatabase makes another database the main, and back', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other', 'app_main'] });
+		await h.store.link('main', 'app_main');
+		await h.controller.start();
+		await h.controller.makeMainDatabase('other');
+		let state = h.controller.snapshot();
+		assert.match(h.ui.messages('confirm')[0], /Make other the main database/);
+		assert.strictEqual(state.current?.mainName, 'other');
+		assert.strictEqual(state.current?.name, 'other', 'a branch without its own database follows the main');
+		assert.strictEqual(state.current?.isMain, true);
+		assert.match(h.envSink.last?.additions?.DATABASE_URL ?? '', /\/other$/);
+		assert.strictEqual(state.databases[0].name, 'other');
+		assert.strictEqual(h.store.linkOf('main'), undefined, 'main branches follow the main database');
+
+		await h.controller.removeDatabase('other');
+		assert.ok(h.ui.messages('error').length > 0, 'the main cannot be dropped');
+
+		await h.controller.makeMainDatabase('app');
+		assert.strictEqual(h.controller.snapshot().current?.mainName, 'app');
+		assert.strictEqual(h.store.data().main, undefined, "the URL's own database needs nothing stored");
+	});
+
+	test('makeMainDatabase changes nothing when not confirmed', async () => {
+		const h = harness({ databases: ['postgres', 'app', 'other'] });
+		await h.controller.start();
+		h.ui.confirmAnswer = () => false;
+		await h.controller.makeMainDatabase('other');
+		assert.strictEqual(h.controller.snapshot().current?.mainName, 'app');
+		assert.strictEqual(h.store.data().main, undefined);
+	});
+
 	test('switchBack without history says so', async () => {
 		const h = harness();
 		await h.controller.start();

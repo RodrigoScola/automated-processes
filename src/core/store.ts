@@ -24,6 +24,8 @@ export interface StoreData {
 	previous?: string;
 	/** Last database the extension made current, used to detect changes. */
 	current?: string;
+	/** Database made the main with Make Main; unset = the one the connection URL points at. */
+	main?: string;
 }
 
 const KEY = 'automatedProcesses.state';
@@ -38,6 +40,7 @@ export class BranchStore {
 			meta: { ...(stored?.meta ?? {}) },
 			previous: stored?.previous,
 			current: stored?.current,
+			main: stored?.main,
 		};
 	}
 
@@ -77,6 +80,12 @@ export class BranchStore {
 		return true;
 	}
 
+	async setMain(database: string | undefined): Promise<void> {
+		const data = this.data();
+		data.main = database;
+		await this.save(data);
+	}
+
 	meta(database: string): DatabaseMeta {
 		return this.data().meta[database] ?? {};
 	}
@@ -102,6 +111,9 @@ export class BranchStore {
 		delete data.meta[database];
 		if (data.previous === database) {
 			data.previous = undefined;
+		}
+		if (data.main === database) {
+			data.main = undefined;
 		}
 		await this.save(data);
 	}

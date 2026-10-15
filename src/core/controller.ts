@@ -9,6 +9,7 @@ import {
 	buildCommandEnv,
 	buildCommandEnvWithoutDatabase,
 	buildEnvAdditions,
+	configuredMainDatabase,
 	engineKind,
 	MainDatabase,
 	mainDatabase,
@@ -105,7 +106,7 @@ export class Controller {
 		this.started = true;
 		await this.refresh();
 		this.initialized = true;
-		if (this.dockerProblem === 'containerStopped' && this.deps.readConfig().config.database.autoStartContainer) {
+		if (this.dockerProblem === 'containerStopped' && this.readConfig().config.database.autoStartContainer) {
 			await this.startDatabase();
 		}
 		await this.checkFinishedBranches();
@@ -118,7 +119,7 @@ export class Controller {
 
 	/** Servers with `runOnStartup`, then scripts with `runOn.startup`. */
 	private async runStartupItems(): Promise<void> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		for (const server of config.servers.filter((item) => item.runOnStartup)) {
 			if (server.command) {
 				await this.startServer(server.id);
@@ -133,7 +134,7 @@ export class Controller {
 
 	/** Runs the scripts set to run when a file is saved (`files`: workspace-relative, with `/`). */
 	async onFilesSaved(files: string[]): Promise<void> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		for (const script of config.scripts.filter((item) => item.runOn?.fileSave)) {
 			const patterns = script.runOn?.fileSavePatterns ?? [];
 			// A pattern without "/" matches the file name in any folder.
@@ -194,7 +195,7 @@ export class Controller {
 		}
 		await this.restartServersIfPending();
 		if (previousBranch !== undefined && branch !== undefined) {
-			const { config } = this.deps.readConfig();
+			const { config } = this.readConfig();
 			for (const script of config.scripts.filter((item) => item.runOn?.branchChange)) {
 				await this.runAutomatically(script, `the branch changed to "${branch}"`);
 			}
@@ -204,7 +205,7 @@ export class Controller {
 	/** Re-reads settings, env files and the database list, then updates terminals and the view. */
 	async refresh(): Promise<void> {
 		const root = this.deps.root();
-		const { config, problems } = this.deps.readConfig();
+		const { config, problems } = this.readConfig();
 		this.problems = [...problems];
 		this.current = undefined;
 		this.mainName = undefined;
@@ -293,7 +294,7 @@ export class Controller {
 	// ── View state ────────────────────────────────────────────────────────────
 
 	snapshot(): ViewState {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const root = this.deps.root();
 		const data = this.deps.store.data();
 		const branch = this.deps.git.currentBranch();
@@ -575,7 +576,52 @@ export class Controller {
 			if (!databases.includes(chosen)) {
 				throw new UserError(`Database "${chosen}" doesn't exist.`);
 			}
+			// Linking a main branch to another database would quietly make that one its main; Make
+			// Main does that on purpose. Here it's only used for now.
+			if (chosen !== ready.main.name && isMainBranch(branch, ready.config.database.mainBranches)) {
+				this.temporary = chosen;
+				await this.refresh();
+				return;
+			}
 			await this.linkCurrentBranch(ready, branch, chosen);
+		});
+	}
+
+	/** Makes `name` the main database: the one main branches, and branches without their own, use. */
+	async makeMainDatabase(name?: string): Promise<void> {
+		await this.guard('Changing the main database', async () => {
+			const ready = this.ready();
+			const databases = (await ready.engine.listDatabases())
+				.filter((db) => db !== ready.main.name && !MAINTENANCE_DATABASES.includes(db));
+			const chosen = name ?? await this.deps.ui.pickOne(
+				this.databaseItems(databases, ready, this.current?.database),
+				'Make which database the main?',
+			);
+			if (!chosen || chosen === ready.main.name) {
+				return;
+			}
+			if (!databases.includes(chosen)) {
+				throw new UserError(`Database "${chosen}" doesn't exist.`);
+			}
+			const source = ready.config.database.url ? 'The connection URL' : ready.config.envFile;
+			const confirmed = await this.deps.ui.confirm(
+				`Make ${chosen} the main database?`,
+				`Main branches and branches without a database of their own will use ${chosen} instead of ${ready.main.name}, and New Database copies from it. ${source} isn't changed.`,
+				'Make Main',
+			);
+			if (!confirmed) {
+				return;
+			}
+			const configured = configuredMainDatabase(ready.config, ready.env).name;
+			await this.deps.store.setMain(chosen === configured ? undefined : chosen);
+			// Main branches follow the main database.
+			for (const branch of ready.config.database.mainBranches) {
+				if (this.deps.store.linkOf(branch)) {
+					await this.deps.store.unlink(branch);
+				}
+			}
+			await this.refresh();
+			void this.deps.ui.info(`${chosen} is now the main database.`);
 		});
 	}
 
@@ -797,7 +843,7 @@ export class Controller {
 	 */
 	async connectDatabase(): Promise<void> {
 		await this.refresh();
-		if (this.dockerProblem === 'containerStopped' && this.deps.readConfig().config.database.autoStartContainer) {
+		if (this.dockerProblem === 'containerStopped' && this.readConfig().config.database.autoStartContainer) {
 			await this.startDatabase();
 		}
 	}
@@ -805,7 +851,7 @@ export class Controller {
 	async startDatabase(): Promise<void> {
 		await this.guard('Starting database', async () => {
 			const root = this.deps.root();
-			const { config } = this.deps.readConfig();
+			const { config } = this.readConfig();
 			const docker = dockerTarget(config);
 			if (!root || !docker) {
 				throw new UserError('Set automatedProcesses.database.dockerContainer (or dockerComposeService) to start the database from here.');
@@ -1081,7 +1127,7 @@ export class Controller {
 	}
 
 	async runScript(scriptId: string, step?: number): Promise<RunState | undefined> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const script = config.scripts.find((item) => item.id === scriptId);
 		if (!script) {
 			void this.deps.ui.error(`No script with id "${scriptId}" in automatedProcesses.scripts.`);
@@ -1181,7 +1227,7 @@ export class Controller {
 			return;
 		}
 		this.restartPending = false;
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const mode = config.server.onDatabaseChange;
 		const running = this.restartableRunning(config);
 		if (mode === 'off' || running.length === 0 || !this.current) {
@@ -1223,7 +1269,7 @@ export class Controller {
 	private async restartRunning(onlyDatabaseDependent: boolean): Promise<string[]> {
 		const restarted: string[] = [];
 		try {
-			const { config } = this.deps.readConfig();
+			const { config } = this.readConfig();
 			const terminals = new Set(this.deps.server.runningServers());
 			for (const server of config.servers) {
 				if (terminals.has(server.id) && server.command && (server.restartOnDatabaseChange || !onlyDatabaseDependent)) {
@@ -1240,7 +1286,7 @@ export class Controller {
 	}
 
 	private server(id?: string): ServerDefinition {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const server = id === undefined ? config.servers[0] : config.servers.find((item) => item.id === id);
 		if (!server) {
 			throw new UserError(id === undefined
@@ -1274,7 +1320,7 @@ export class Controller {
 	}
 
 	private willMigrateAutomatically(branch: string): boolean {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		// Mirrors afterBranchSwitch: a feature branch without its own database never migrates.
 		const skipsMigrations = !this.current?.linked && !isMainBranch(branch, config.database.mainBranches);
 		return config.migrations.onBranchChange === 'always' && config.migrations.command !== '' && !skipsMigrations;
@@ -1316,7 +1362,7 @@ export class Controller {
 
 	/** The branch got new commits (pull, merge, rebase): run the scripts set to run then. */
 	private async afterBranchUpdated(branch: string, from: string, to: string): Promise<void> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const legacy = config.onGitUpdate;
 		const scripts = config.scripts.filter((script) => script.runOn?.gitUpdate
 			&& !(script.id === legacy.script && legacy.skipMainBranches && isMainBranch(branch, config.database.mainBranches)));
@@ -1337,7 +1383,7 @@ export class Controller {
 	}
 
 	private async afterBranchSwitch(branch: string): Promise<void> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		const current = this.current;
 		if (!current) {
 			return;
@@ -1367,7 +1413,7 @@ export class Controller {
 
 	/** Runs the migrations command against `database`, warning first when that's main on a feature branch. */
 	private async runMigrationsOn(database: string, warnOnMain: boolean, quietOnSuccess: boolean): Promise<void> {
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		if (!config.migrations.command) {
 			throw new UserError('No migrations command. Set automatedProcesses.migrations.command.');
 		}
@@ -1544,7 +1590,7 @@ export class Controller {
 	 */
 	private withoutDatabase(): { config: Config; root: string; env: ProjectEnv | undefined; branch: string | undefined } | undefined {
 		const root = this.requireRoot();
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		let env: ProjectEnv | undefined;
 		try {
 			env = this.deps.readEnv(root, config);
@@ -1560,7 +1606,7 @@ export class Controller {
 		if (!root) {
 			throw new UserError('Open a folder first.');
 		}
-		const { config } = this.deps.readConfig();
+		const { config } = this.readConfig();
 		let env: ProjectEnv;
 		let main: MainDatabase;
 		try {
@@ -1624,6 +1670,15 @@ export class Controller {
 			this.changed();
 		}
 		await this.restartServersIfPending();
+	}
+
+	/** The settings, with the database made the main (Make Main) from workspace state. */
+	private readConfig(): ConfigResult {
+		const result = this.deps.readConfig();
+		const main = this.deps.store.data().main;
+		return main
+			? { ...result, config: { ...result.config, database: { ...result.config.database, mainDatabase: main } } }
+			: result;
 	}
 
 	private changed(): void {

@@ -109,6 +109,11 @@
         "category": "Automated Processes"
       },
       {
+        "command": "automated-processes.makeMainDatabase",
+        "title": "Make Database the Main",
+        "category": "Automated Processes"
+      },
+      {
         "command": "automated-processes.removeDatabase",
         "title": "Remove Database",
         "category": "Automated Processes"

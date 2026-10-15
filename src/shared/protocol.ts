@@ -114,6 +114,7 @@ export type CommandName =
 	| 'switchBack'
 	| 'useDatabaseTemporarily'
 	| 'stopTemporaryDatabase'
+	| 'makeMainDatabase'
 	| 'removeDatabase'
 	| 'cleanUpDatabases'
 	| 'runMigrations'

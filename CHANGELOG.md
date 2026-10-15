@@ -21,6 +21,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **Use for now** (plug button on a database, or **Use Database Temporarily**): use another database
   without relinking the branch. Switching branches, reloading or **Go back** returns to the
   branch's own database.
+- **Make Main** (star button on a database, or **Make Database the Main**): makes another database
+  the main one for this workspace, without editing the env file. On a main branch, **Use for this
+  branch** no longer quietly makes a database its main; it's used for now instead.
 - The sidebar is four resizable, collapsible views: Database, Servers, Scripts and Settings.
 - Scripts and servers run in background terminals without taking focus (`revealTerminal`).
 - Configure panel: **Save for** this workspace or all workspaces; **Add defaults** detects servers,

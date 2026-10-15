@@ -79,6 +79,23 @@ suite('renderApp', () => {
 		assert.ok(!/data-command="useDatabaseTemporarily" data-database="app_347"/.test(html), 'not for the current one');
 		assert.match(html, /data-migrate-from="app_347"/);
 		assert.ok(!/data-command="removeDatabase" data-database="app"/.test(html), 'main has no drop action');
+		assert.match(html, /data-command="makeMainDatabase" data-database="app_347"/);
+		assert.ok(!/data-command="makeMainDatabase" data-database="app"/.test(html), 'already the main');
+	});
+
+	test('on a main branch, only the main database can be used for the branch', () => {
+		const html = renderApp(state({
+			branch: 'main',
+			isMainBranch: true,
+			current: { name: 'app', isMain: true, linked: false, mainName: 'app' },
+			databases: [
+				{ name: 'app', isMain: true, isCurrent: true, isPrevious: false, branches: [], hidden: false },
+				{ name: 'app_347', isMain: false, isCurrent: false, isPrevious: false, branches: ['347-carer-leaver'], hidden: false },
+			],
+		}));
+		assert.ok(!/data-command="switchDatabase" data-database="app_347"/.test(html), 'that would make it the main');
+		assert.match(html, /data-command="useDatabaseTemporarily" data-database="app_347"/);
+		assert.match(html, /data-command="makeMainDatabase" data-database="app_347"/);
 	});
 
 	test('shows scripts with their inputs and the migrations button', () => {

@@ -248,7 +248,14 @@ function renderDatabaseList(state: ViewState): string {
   }
   const branchDatabase = state.current?.branchDatabase;
   const rows = state.databases
-    .map((db) => renderDatabaseRow(db, Boolean(state.busy), branchDatabase))
+    .map((db) =>
+      renderDatabaseRow(
+        db,
+        Boolean(state.busy),
+        branchDatabase,
+        state.isMainBranch,
+      ),
+    )
     .join("");
   // Main and current only, unless the "Show all databases" option is on; hidden ones only matter then.
   const hidden =
@@ -262,6 +269,7 @@ function renderDatabaseRow(
   db: ViewDatabase,
   busy: boolean,
   branchDatabase: string | undefined,
+  isMainBranch: boolean,
 ): string {
   const marker = db.isCurrent
     ? icon("circle-filled", "marker marker-current")
@@ -284,12 +292,20 @@ function renderDatabaseRow(
               `Use ${db.name} for now (the branch keeps its own database)`,
               `data-command="useDatabaseTemporarily" data-database="${n}"`,
             ),
-        db.isCurrent && !temporary
+        // On a main branch that would make it the main; the star does that on purpose.
+        (db.isCurrent && !temporary) || (isMainBranch && !db.isMain)
           ? ""
           : iconButton(
               "arrow-right",
               `Use ${db.name} for this branch`,
               `data-command="switchDatabase" data-database="${n}"`,
+            ),
+        db.isMain
+          ? ""
+          : iconButton(
+              "star-empty",
+              `Make ${db.name} the main database`,
+              `data-command="makeMainDatabase" data-database="${n}"`,
             ),
         iconButton(
           "archive",
